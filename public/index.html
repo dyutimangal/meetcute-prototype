@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>meetcute</title>
+    <style>
+      :root { --bg: #0f172a; --accent: #ff7a59; --muted: #94a3b8; }
+      html,body{height:100%;margin:0}
+      body{display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#07102a 0%,#0b1220 100%);color: #e6eef6;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial}
+      .card{display:flex;flex-direction:column;align-items:center;gap:.5rem;padding:2.5rem;border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.02));box-shadow:0 6px 30px rgba(2,6,23,0.6);text-align:center;min-width:260px}
+      h1{font-weight:700;font-size:48px;margin:0;background:linear-gradient(90deg,#fff,#ffd1b8);-webkit-background-clip:text;background-clip:text;color:transparent;letter-spacing:1px}
+      p{margin:0;color:var(--muted)}
+      .meta{margin-top:.75rem;font-size:.88rem;color:var(--muted)}
+      .cta{margin-top:1.25rem;padding:.5rem .9rem;border-radius:8px;background:linear-gradient(90deg,#ff7a59,#ffb199);color:#111;font-weight:600;text-decoration:none}
+    </style>
+  </head>
+  <body>
+    <div class="card" role="main">
+      <h1>meetcute</h1>
+      <p class="meta">Claim a unique username and visit your personal page.</p>
+
+      <form id="signup" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:.5rem">
+        <input id="username" name="username" placeholder="choose a username (eg: alex123)" autocomplete="off" style="padding:.6rem .8rem;border-radius:8px;border:1px solid rgba(255,255,255,0.06);width:100%;max-width:320px;background:transparent;color:inherit" />
+        <input id="email" name="email" placeholder="you@example.com" type="email" autocomplete="email" style="padding:.6rem .8rem;border-radius:8px;border:1px solid rgba(255,255,255,0.06);width:100%;max-width:320px;background:transparent;color:inherit" />
+        <div id="message" style="font-size:.9rem;color:var(--muted);min-height:1.1rem"></div>
+        <button class="cta" type="submit">Claim username</button>
+      </form>
+
+      <p class="meta" style="margin-top:1rem;font-size:.8rem;color:var(--muted)">Already have a username? Just open <code style="background:#07102a;padding:.1rem .35rem;border-radius:6px">/<i>your-username</i></code> (eg <a href="/yourname">/yourname</a>).</p>
+    </div>
+
+    <script>
+      const form = document.getElementById('signup');
+      const usernameInput = document.getElementById('username');
+      const messageEl = document.getElementById('message');
+
+      function showMessage(text, isError) {
+        messageEl.textContent = text;
+        messageEl.style.color = isError ? '#ffb4a0' : 'var(--muted)';
+      }
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const username = usernameInput.value && usernameInput.value.trim();
+        const email = (document.getElementById('email').value || '').trim();
+        const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+        if (!username) return showMessage('Please enter a username.', true);
+        if (!email) return showMessage('Please enter an email address.', true);
+        if (!emailValid) return showMessage('Please enter a valid email address.', true);
+
+        showMessage('Checking and creating your username...', false);
+
+        try {
+          const resp = await fetch('/api/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, email })
+          });
+
+          if (resp.status === 201 || resp.status === 200) {
+            // success (created or already existed) — redirect to the user's page
+            window.location.href = '/' + encodeURIComponent(username);
+            return;
+          }
+
+          const data = await resp.json();
+          if (resp.status === 409) {
+            const err = await resp.json().catch(() => ({}));
+            if (err.error && err.error.includes('another email')) {
+              showMessage('That username is already taken by a different email. Try a different username or use the email associated with that username.', true);
+            } else if (err.error && err.error.includes('email')) {
+              showMessage('That email is already in use by another account — try logging in or use another email.', true);
+            } else {
+              showMessage('That username is already taken — try another one.', true);
+            }
+            return;
+          }
+          showMessage(data.error || 'Unexpected error — try again.', true);
+        } catch (err) {
+          showMessage('Network error. Check your connection and try again.', true);
+        }
+      });
+    </script>
+  </body>
+</html>
