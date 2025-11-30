@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>meetcute — user</title>
+    <style>
+      html,body{height:100%;margin:0;font-family:Inter,system-ui,Arial;color:#e6eef6;background:linear-gradient(135deg,#07102a 0%,#0b1220 100%);display:flex;align-items:center;justify-content:center}
+      .panel{padding:2rem;border-radius:12px;background:rgba(255,255,255,0.02);min-width:320px;text-align:center}
+      h1{margin:0 0 0.5rem 0;font-size:36px}
+      .sub{color:#94a3b8;margin:0 0 1rem 0}
+      .meta{margin-top:.5rem;color:#b5c4d6}
+    </style>
+  </head>
+  <body>
+    <div class="panel">
+      <div id="content">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
+          <div style="flex:1;text-align:left">
+            <h1 id="title">meetcute</h1>
+            <p class="sub" id="subtitle">Loading profile…</p>
+          </div>
+          <div style="text-align:right">
+            <button id="editBtn" style="background:transparent;border:1px solid rgba(255,255,255,0.06);padding:.4rem .6rem;border-radius:8px;color:#ffd1b8;cursor:pointer">Edit profile</button>
+          </div>
+        </div>
+
+        <div id="actions" style="margin-top:1.25rem"></div>
+
+        <div id="people" style="margin-top:1.25rem;display:flex;flex-direction:column;gap:.75rem;align-items:center">
+          <div id="count" style="font-size:14px;color:#bfcfe0"></div>
+          <div id="list" style="display:flex;flex-wrap:wrap;gap:0.5rem;justify-content:center"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // extract username from path
+      const username = decodeURIComponent(window.location.pathname.replace(/^\//, ''));
+
+      const titleEl = document.getElementById('title');
+      const subtitle = document.getElementById('subtitle');
+      const actions = document.getElementById('actions');
+
+      async function fetchPeople(filter) {
+        // filter: {minAge, maxAge, intention, interestedIn}
+        const params = new URLSearchParams();
+        params.set('exclude', username);
+        if (filter && filter.minAge) params.set('minAge', filter.minAge);
+        if (filter && filter.maxAge) params.set('maxAge', filter.maxAge);
+        if (filter && filter.intention) params.set('intention', filter.intention);
+        if (filter && filter.interestedIn) params.set('interestedIn', filter.interestedIn);
+        const res = await fetch('/api/users?' + params.toString());
+        if (!res.ok) return [];
+        return res.json();
+      }
+
+      function renderPeople(list) {
+        const listEl = document.getElementById('list');
+        const countEl = document.getElementById('count');
+        listEl.innerHTML = '';
+        countEl.textContent = `${list.length} other user${list.length === 1 ? '' : 's'} nearby`;
+
+        list.forEach(u => {
+          const el = document.createElement('div');
+          el.style.width = '56px';
+          el.style.height = '56px';
+          el.style.display = 'flex';
+          el.style.alignItems = 'center';
+          el.style.justifyContent = 'center';
+          el.style.borderRadius = '999px';
+          el.style.background = 'linear-gradient(90deg,#1c2750, #2b354f)';
+          el.style.boxShadow = '0 4px 18px rgba(0,0,0,0.5)';
+          el.style.color = '#ffd1b8';
+          el.style.fontWeight = '700';
+          el.style.cursor = 'pointer';
+          el.title = u.username;
+          el.textContent = (u.username || '?').slice(0,2).toUpperCase();
+          el.addEventListener('click', () => window.location.href = '/' + encodeURIComponent(u.username));
+          listEl.appendChild(el);
+        });
+      }
+
+      // profile editing
+      function openEditor(initial) {
+        // create overlay
+        const overlay = document.createElement('div');
+        overlay.style.position = 'fixed';
+        overlay.style.inset = '0';
+        overlay.style.display = 'flex';
+        overlay.style.alignItems = 'center';
+        overlay.style.justifyContent = 'center';
+        overlay.style.background = 'rgba(2,6,23,0.6)';
+
+        const card = document.createElement('div');
+        card.style.background = '#061029';
+        card.style.borderRadius = '12px';
+        card.style.padding = '1rem';
+        card.style.minWidth = '320px';
+        card.style.color = '#e6eef6';
+
+        card.innerHTML = `
+          <h3 style="margin:0 0 8px 0">Edit profile — ${initial.username}</h3>
+          <form id="editorForm" style="display:flex;flex-direction:column;gap:.5rem">
+            <label style="font-size:.85rem;color:#b6c8da">Age</label>
+            <input name="age" value="${initial.age || ''}" placeholder="Age" />
+
+            <label style="font-size:.85rem;color:#b6c8da;margin-top:6px">Intention (select all that apply)</label>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+              <label><input type="checkbox" name="intention" value="dating" ${initial.intention && initial.intention.includes('dating') ? 'checked' : ''}> dating</label>
+              <label><input type="checkbox" name="intention" value="friendship" ${initial.intention && initial.intention.includes('friendship') ? 'checked' : ''}> friendship</label>
+            </div>
+
+            <label style="font-size:.85rem;color:#b6c8da;margin-top:6px">Who you're into (select all that apply)</label>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+              <label><input type="checkbox" name="interestedIn" value="girls" ${initial.interestedIn && initial.interestedIn.includes('girls') ? 'checked' : ''}> girls</label>
+              <label><input type="checkbox" name="interestedIn" value="guys" ${initial.interestedIn && initial.interestedIn.includes('guys') ? 'checked' : ''}> guys</label>
+              <label><input type="checkbox" name="interestedIn" value="non-binary" ${initial.interestedIn && initial.interestedIn.includes('non-binary') ? 'checked' : ''}> non-binary</label>
+            </div>
+
+            <label style="font-size:.85rem;color:#b6c8da;margin-top:6px">Preferred age range</label>
+            <div style="display:flex;gap:.5rem;align-items:center">
+              <input name="minAge" placeholder="min" value="${initial.preferredAgeRange && initial.preferredAgeRange.min ? initial.preferredAgeRange.min : ''}" style="width:72px" />
+              <span style="color:#b6c8da">—</span>
+              <input name="maxAge" placeholder="max" value="${initial.preferredAgeRange && initial.preferredAgeRange.max ? initial.preferredAgeRange.max : ''}" style="width:72px" />
+            </div>
+
+            <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.5rem">
+              <button type="button" id="cancelBtn" style="background:transparent;border:1px solid rgba(255,255,255,0.06);padding:.4rem .6rem;border-radius:8px;color:#ffd1b8;cursor:pointer">Cancel</button>
+              <button type="submit" style="padding:.45rem .8rem;border-radius:8px;border:none;background:linear-gradient(90deg,#ff7a59,#ffb199);color:#111;font-weight:600;cursor:pointer">Save</button>
+            </div>
+          </form>
+        `;
+
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+
+        overlay.querySelector('#cancelBtn').addEventListener('click', () => overlay.remove());
+
+        overlay.querySelector('#editorForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const form = e.currentTarget;
+          const fd = new FormData(form);
+          const age = fd.get('age');
+          const intention = form.querySelectorAll('input[name="intention"]:checked');
+          const interestedIn = form.querySelectorAll('input[name="interestedIn"]:checked');
+          const minAge = fd.get('minAge');
+          const maxAge = fd.get('maxAge');
+
+          const payload = {
+            age: age ? Number(age) : undefined,
+            intention: Array.from(intention).map(i => i.value),
+            interestedIn: Array.from(interestedIn).map(i => i.value),
+            preferredAgeRange: { min: minAge ? Number(minAge) : undefined, max: maxAge ? Number(maxAge) : undefined }
+          };
+
+          // remove undefined values
+          if (!payload.age) delete payload.age;
+          if (payload.preferredAgeRange.min == null || Number.isNaN(payload.preferredAgeRange.min)) delete payload.preferredAgeRange.min;
+          if (payload.preferredAgeRange.max == null || Number.isNaN(payload.preferredAgeRange.max)) delete payload.preferredAgeRange.max;
+
+          // send update
+          try {
+            const res = await fetch('/api/users/' + encodeURIComponent(username), {
+              method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+              const d = await res.json().catch(() => ({}));
+              alert('Error saving profile: ' + (d.error || res.statusText));
+              return;
+            }
+            overlay.remove();
+            // refresh profile and people list
+            load();
+          } catch (err) {
+            alert('Network error saving profile');
+          }
+        });
+      }
+
+      // hook edit button
+      document.getElementById('editBtn').addEventListener('click', () => openEditor(currentProfile || { username }));
+
+      let currentProfile = null;
+
+      async function load() {
+        if (!username) {
+          titleEl.textContent = 'meetcute';
+          subtitle.textContent = 'Create or open your page at /<username>';
+          return;
+        }
+
+        titleEl.textContent = username;
+        subtitle.textContent = 'Loading...';
+
+        try {
+          const res = await fetch('/api/users/' + encodeURIComponent(username));
+          if (res.status === 404) {
+            subtitle.textContent = "This username isn't registered yet.";
+            actions.innerHTML = `<a href="/" style="color:#ffd1b8;text-decoration:none">Go back and claim it</a>`;
+            return;
+          }
+
+          const data = await res.json();
+          currentProfile = data;
+          subtitle.textContent = 'Welcome — this is your private page.';
+          actions.innerHTML = `<div class="meta">created: ${new Date(data.createdAt).toLocaleString()}</div>`;
+
+          // decide filter: use this user's preferredAgeRange if provided
+          const min = data.preferredAgeRange && data.preferredAgeRange.min ? data.preferredAgeRange.min : undefined;
+          const max = data.preferredAgeRange && data.preferredAgeRange.max ? data.preferredAgeRange.max : undefined;
+
+          // also prefer matching intention/interestedIn — pass them as comma-separated lists
+          const intention = (data.intention || []).join(',');
+          const interestedIn = (data.interestedIn || []).join(',');
+
+          const people = await fetchPeople({ minAge: min, maxAge: max, intention: intention || undefined, interestedIn: interestedIn || undefined });
+          renderPeople(people);
+        } catch (err) {
+          subtitle.textContent = 'Error loading profile. Try again later.';
+        }
+      }
+
+      load();
+    </script>
+  </body>
+</html>
