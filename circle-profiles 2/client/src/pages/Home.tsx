@@ -7,7 +7,7 @@ import { Slider } from "@/components/ui/slider";
 import { currentUser, profiles, type Profile } from "@/lib/data";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bell, Filter, Heart, Maximize2, MessageCircle, Send, X } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 interface FilterState {
   ageMin: number;
@@ -37,6 +37,15 @@ export default function Home() {
     { id: 3, sender: "other", text: "Pretty good! Would love to grab coffee sometime" },
   ]);
   const [chatInput, setChatInput] = useState("");
+  const [showSetupModal, setShowSetupModal] = useState(false);
+  const [setupData, setSetupData] = useState({
+    age: "",
+    intention: [] as string[],
+    identification: "",
+    interestedIn: [] as string[],
+    preferredAgeMin: "",
+    preferredAgeMax: "",
+  });
   const [filters, setFilters] = useState<FilterState>({
     ageMin: 18,
     ageMax: 65,
@@ -44,6 +53,50 @@ export default function Home() {
     interestedInYou: false,
     matchedWith: false,
   });
+
+  useEffect(() => {
+    // Check if user has completed setup
+    const currentUser = localStorage.getItem("meetCuteUser");
+    if (currentUser) {
+      const setupKey = `meetCuteUserSetup_${currentUser}`;
+      const userSetup = localStorage.getItem(setupKey);
+      if (!userSetup) {
+        setShowSetupModal(true);
+      }
+    }
+  }, []);
+
+  const handleSetupComplete = () => {
+    if (!setupData.age || setupData.intention.length === 0 || !setupData.identification || setupData.interestedIn.length === 0 || !setupData.preferredAgeMin || !setupData.preferredAgeMax) {
+      alert("Please fill in all fields");
+      return;
+    }
+    // Save setup data with user-specific key
+    const currentUser = localStorage.getItem("meetCuteUser");
+    const setupKey = `meetCuteUserSetup_${currentUser}`;
+    localStorage.setItem(setupKey, JSON.stringify(setupData));
+    // Also save a flag that setup is complete
+    localStorage.setItem("meetCuteUserSetup", "true");
+    setShowSetupModal(false);
+  };
+
+  const toggleIntention = (value: string) => {
+    setSetupData((prev) => ({
+      ...prev,
+      intention: prev.intention.includes(value)
+        ? prev.intention.filter((i) => i !== value)
+        : [...prev.intention, value],
+    }));
+  };
+
+  const toggleInterestedIn = (value: string) => {
+    setSetupData((prev) => ({
+      ...prev,
+      interestedIn: prev.interestedIn.includes(value)
+        ? prev.interestedIn.filter((i) => i !== value)
+        : [...prev.interestedIn, value],
+    }));
+  };
 
   // Calculate positions for concentric circles
   const rings = [
@@ -90,7 +143,7 @@ export default function Home() {
           {/* Left: Branding */}
           <div>
             <h1 className="text-5xl sm:text-6xl font-bold text-foreground" style={{ fontFamily: "Fredoka, sans-serif" }}>
-              Meet Cute
+              meetcute
             </h1>
             <p className="text-lg sm:text-xl text-muted-foreground font-body mt-2">
               Find people near you
@@ -98,13 +151,13 @@ export default function Home() {
           </div>
 
           {/* Right: Action Buttons */}
-          <div className="flex items-start gap-3">
+          <div className="flex flex-col items-center gap-1">
             {/* Notification Button */}
             <button
               onClick={() => setShowNotifications(!showNotifications)}
-              className="flex items-center justify-center w-10 h-10 text-foreground hover:text-primary transition-colors"
+              className="flex items-center justify-center w-8 h-8 text-foreground hover:text-primary transition-colors"
             >
-              <Bell className="h-6 w-6" />
+              <Bell className="h-5 w-5" />
             </button>
 
             {/* Chat Button */}
@@ -113,18 +166,18 @@ export default function Home() {
                 setShowChat(true);
                 setChatProfile(profiles[0]);
               }}
-              className="flex items-center justify-center w-10 h-10 text-foreground hover:text-secondary transition-colors"
+              className="flex items-center justify-center w-8 h-8 text-foreground hover:text-secondary transition-colors"
             >
-              <MessageCircle className="h-6 w-6" />
+              <MessageCircle className="h-5 w-5" />
             </button>
 
             {/* Filter Button */}
             <div className="relative">
               <button
                 onClick={() => setShowFilter(!showFilter)}
-                className="flex items-center justify-center w-10 h-10 text-foreground hover:text-primary transition-colors"
+                className="flex items-center justify-center w-8 h-8 text-foreground hover:text-primary transition-colors"
               >
-                <Filter className="h-6 w-6" />
+                <Filter className="h-5 w-5" />
               </button>
 
               {/* Filter Dropdown */}
@@ -135,7 +188,7 @@ export default function Home() {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
                     transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                    className="absolute top-full right-0 mt-2 w-80 bg-background border-2 border-black rounded-none shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 z-50"
+                    className="absolute top-full right-0 mt-1 w-80 bg-background border-2 border-black rounded-none shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 z-50"
                 >
                   {/* Age Filter */}
                   <div className="space-y-4 mb-6">
@@ -266,6 +319,138 @@ export default function Home() {
         </div>
       </div>
 
+      {/* Setup Modal */}
+      <AnimatePresence>
+        {showSetupModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-background border-4 border-black rounded-none shadow-[16px_16px_0px_0px_rgba(0,0,0,1)] max-w-md w-full max-h-[90vh] overflow-y-auto p-6 space-y-6"
+            >
+              <h2 className="text-3xl font-bold text-foreground" style={{ fontFamily: "Fredoka, sans-serif" }}>
+                Complete Your Profile
+              </h2>
+
+              {/* Age Field */}
+              <div className="space-y-2">
+                <label className="block text-sm font-bold text-foreground font-body">Your Age</label>
+                <Input
+                  type="number"
+                  min="18"
+                  max="100"
+                  placeholder="Enter your age"
+                  value={setupData.age}
+                  onChange={(e) => setSetupData({ ...setupData, age: e.target.value })}
+                  className="w-full border-2 border-black rounded-none font-body"
+                />
+              </div>
+
+              {/* Intention Field */}
+              <div className="space-y-3">
+                <label className="block text-sm font-bold text-foreground font-body">Looking For</label>
+                <div className="space-y-2">
+                  {["Dating", "Friends"].map((option) => (
+                    <label key={option} className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={setupData.intention.includes(option.toLowerCase())}
+                        onChange={() => toggleIntention(option.toLowerCase())}
+                        className="w-5 h-5 border-2 border-black cursor-pointer"
+                      />
+                      <span className="font-body text-foreground">{option}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Identification Field */}
+              <div className="space-y-3">
+                <label className="block text-sm font-bold text-foreground font-body">I Identify As</label>
+                <div className="space-y-2">
+                  {["Male", "Female", "Non-binary"].map((option) => (
+                    <label key={option} className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="identification"
+                        value={option.toLowerCase()}
+                        checked={setupData.identification === option.toLowerCase()}
+                        onChange={(e) => setSetupData({ ...setupData, identification: e.target.value })}
+                        className="w-5 h-5 border-2 border-black cursor-pointer"
+                      />
+                      <span className="font-body text-foreground">{option}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Who You Are Into Field */}
+              <div className="space-y-3">
+                <label className="block text-sm font-bold text-foreground font-body">Who You Are Into</label>
+                <div className="space-y-2">
+                  {["Male", "Female", "Non-binary"].map((option) => (
+                    <label key={option} className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={setupData.interestedIn.includes(option.toLowerCase())}
+                        onChange={() => toggleInterestedIn(option.toLowerCase())}
+                        className="w-5 h-5 border-2 border-black cursor-pointer"
+                      />
+                      <span className="font-body text-foreground">{option}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Preferred Age Range */}
+              <div className="space-y-3">
+                <label className="block text-sm font-bold text-foreground font-body">Preferred Age Range</label>
+                <div className="flex gap-3 items-end">
+                  <div className="flex-1">
+                    <label className="text-xs text-muted-foreground font-body">Min</label>
+                      <Input
+                        type="number"
+                        min="18"
+                        max="100"
+                        placeholder="Min"
+                        value={setupData.preferredAgeMin}
+                        onChange={(e) => setSetupData({ ...setupData, preferredAgeMin: e.target.value })}
+                        className="w-full border-2 border-black rounded-none font-body"
+                      />
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-xs text-muted-foreground font-body">Max</label>
+                    <Input
+                      type="number"
+                      min="18"
+                      max="100"
+                      placeholder="Max"
+                      value={setupData.preferredAgeMax}
+                      onChange={(e) => setSetupData({ ...setupData, preferredAgeMax: e.target.value })}
+                      className="w-full border-2 border-black rounded-none font-body"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Complete Button */}
+              <Button
+                onClick={handleSetupComplete}
+                className="w-full bg-accent text-accent-foreground border-2 border-black rounded-none font-bold py-3 hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-shadow"
+              >
+                Complete Setup
+              </Button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Notifications Popup */}
       <AnimatePresence>
         {showNotifications && (
@@ -279,14 +464,12 @@ export default function Home() {
             {/* Notifications Header */}
             <div className="flex items-center justify-between p-4 border-b-2 border-black sticky top-0 bg-background">
               <h2 className="font-display text-xl text-foreground">Notifications</h2>
-              <Button
-                variant="ghost"
-                size="icon"
+              <button
                 onClick={() => setShowNotifications(false)}
-                className="hover:bg-accent"
+                className="flex items-center justify-center w-8 h-8 text-foreground hover:text-primary transition-colors"
               >
-                <X className="h-6 w-6" />
-              </Button>
+                <X className="h-5 w-5" />
+              </button>
             </div>
 
             {/* Notifications List */}

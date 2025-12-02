@@ -7,7 +7,10 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "test": "jest --runInBand",
-    "test:quick": "node ./scripts/quick-test.js"
+    "test:quick": "node ./scripts/quick-test.js",
+    "build:client": "cd circle-profiles && pnpm build",
+    "start:prod": "npm run build:client && NODE_ENV=production node index.js",
+    "dev:client": "cd circle-profiles && pnpm dev"
   },
   "keywords": [],
   "author": "",

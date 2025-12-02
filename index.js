@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const morgan = require('morgan');
 const mongoose = require('mongoose');
+const fs = require('fs');
 
 const userRoutes = require('./src/routes/users');
 
@@ -11,7 +12,14 @@ app.use(morgan('tiny'));
 
 // Serve static landing page from /public
 const path = require('path');
-app.use(express.static(path.join(__dirname, 'public')));
+// Prefer serving built front-end from circle-profiles if present
+const clientDist = path.join(__dirname, 'circle-profiles', 'dist', 'public');
+if (fs.existsSync(clientDist)) {
+  console.log('Serving client from', clientDist);
+  app.use(express.static(clientDist));
+} else {
+  app.use(express.static(path.join(__dirname, 'public')));
+}
 
 // API root fallback if requested specifically
 app.get('/api', (req, res) => {
@@ -45,9 +53,20 @@ if (require.main === module) {
 module.exports = { app, start };
 
 // Serve per-user page for any username path (after static and API handlers)
-app.get('/:username', (req, res) => {
-  const { username } = req.params;
-  // don't override API paths or static assets — only serve for plain username-like paths
-  if (username.startsWith('api') || username.includes('.')) return res.status(404).end();
-  res.sendFile(require('path').join(__dirname, 'public', 'user.html'));
+// For any non-API route (user-facing routes / SPA routes) serve the client index.html
+app.get('*', (req, res) => {
+  // Let API routes 404/forward as normal
+  if (req.path.startsWith('/api')) return res.status(404).end();
+
+  // Prefer serving built client index.html if available
+  const clientIndex = path.join(clientDist, 'index.html');
+  if (fs.existsSync(clientIndex)) {
+    return res.sendFile(clientIndex);
+  }
+
+  // Fallback to legacy per-user HTML if present
+  const legacyUser = path.join(__dirname, 'public', 'user.html');
+  if (fs.existsSync(legacyUser)) return res.sendFile(legacyUser);
+
+  res.status(404).end();
 });
