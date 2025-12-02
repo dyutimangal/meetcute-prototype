@@ -14,25 +14,59 @@ router.get('/', async (req, res) => {
     const query = {};
     if (exclude) query.username = { $ne: String(exclude).trim().toLowerCase() };
 
-    // age filtering
+    // age filtering — include users without an age set (they match any range)
     if (minAge || maxAge) {
-      query.age = {};
-      if (minAge) query.age.$gte = Number(minAge);
-      if (maxAge) query.age.$lte = Number(maxAge);
+      const ageQuery = { $or: [{ age: { $exists: false } }, { age: null }] };
+      if (minAge || maxAge) {
+        const ageRange = {};
+        if (minAge) ageRange.$gte = Number(minAge);
+        if (maxAge) ageRange.$lte = Number(maxAge);
+        ageQuery.$or.push({ age: ageRange });
+      }
+      query.$or = ageQuery.$or;
     }
 
     if (intention) {
       const arr = String(intention).split(',').map(s => s.trim()).filter(Boolean);
-      if (arr.length) query.intention = { $in: arr };
+      if (arr.length > 0) query.intention = { $in: arr };
     }
 
     if (interestedIn) {
       const arr = String(interestedIn).split(',').map(s => s.trim()).filter(Boolean);
-      if (arr.length) query.interestedIn = { $in: arr };
+      if (arr.length > 0) query.interestedIn = { $in: arr };
     }
 
-    const users = await User.find(query).limit(200);
-    res.json(users);
+    // use .lean() so we can inject generated avatar values without saving to DB here
+    const users = await User.find(query).limit(200).lean();
+    // Get the requesting user (from exclude param) to compute match status
+    const excludeUsername = exclude ? String(exclude).trim().toLowerCase() : null;
+    let requestingUser = null;
+    if (excludeUsername) {
+      requestingUser = await User.findOne({ username: excludeUsername }).lean();
+    }
+    const enriched = users.map(u => {
+      if (!u.avatar && u.username) {
+        const initial = (u.username && u.username[0]) ? u.username[0].toUpperCase() : '?';
+        const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><rect width='100%' height='100%' rx='20' fill='%2318273a'/><text x='50%' y='50%' dy='0.35em' text-anchor='middle' fill='%23ffd1b8' font-family='Arial,Helvetica,sans-serif' font-size='54'>${initial}</text></svg>`;
+        u.avatar = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+      }
+      // compute match status: orange if liked by requesting user, pink if mutual match
+      if (requestingUser) {
+        const iLikedThem = requestingUser.interestedUsers && requestingUser.interestedUsers.includes(u.username);
+        const theyLikedMe = u.interestedUsers && u.interestedUsers.includes(excludeUsername);
+        if (iLikedThem && theyLikedMe) {
+          u.matchStatus = 'matched'; // pink
+        } else if (iLikedThem) {
+          u.matchStatus = 'liked'; // orange
+        } else {
+          u.matchStatus = 'default'; // blue
+        }
+      } else {
+        u.matchStatus = 'default';
+      }
+      return u;
+    });
+    res.json(enriched);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -107,8 +141,13 @@ router.get('/:username', async (req, res) => {
   try {
     const { username } = req.params;
     const normalized = String(username).trim().toLowerCase();
-    const user = await User.findOne({ username: normalized });
+    let user = await User.findOne({ username: normalized }).lean();
     if (!user) return res.status(404).json({ error: 'not found' });
+    if (!user.avatar && user.username) {
+      const initial = (user.username && user.username[0]) ? user.username[0].toUpperCase() : '?';
+      const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><rect width='100%' height='100%' rx='20' fill='%2318273a'/><text x='50%' y='50%' dy='0.35em' text-anchor='middle' fill='%23ffd1b8' font-family='Arial,Helvetica,sans-serif' font-size='54'>${initial}</text></svg>`;
+      user.avatar = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+    }
     res.json(user);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -128,6 +167,17 @@ router.put('/:username', async (req, res) => {
     if (req.body.intention) payload.intention = Array.isArray(req.body.intention) ? req.body.intention : String(req.body.intention).split(',').map(s => s.trim()).filter(Boolean);
     if (req.body.interestedIn) payload.interestedIn = Array.isArray(req.body.interestedIn) ? req.body.interestedIn : String(req.body.interestedIn).split(',').map(s => s.trim()).filter(Boolean);
     if (typeof req.body.age !== 'undefined') payload.age = Number(req.body.age) || undefined;
+    if (typeof req.body.gender !== 'undefined') {
+      const g = String(req.body.gender || '').trim();
+      const allowed = ['male', 'female', 'non-binary'];
+      if (g === '') {
+        // explicit empty -> remove gender by not including it
+      } else if (allowed.includes(g)) {
+        payload.gender = g;
+      } else {
+        return res.status(400).json({ error: 'invalid gender' });
+      }
+    }
     if (req.body.preferredAgeRange) {
       const r = req.body.preferredAgeRange;
       const min = Number(r.min);
@@ -142,6 +192,48 @@ router.put('/:username', async (req, res) => {
     res.json(updated);
   } catch (err) {
     if (err && err.code === 11000) return res.status(409).json({ error: 'duplicate value' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/users/:username/like — record that the requesting user likes the target user
+router.post('/:username/like', async (req, res) => {
+  try {
+    const { username } = req.params;
+    const normalized = String(username).trim().toLowerCase();
+    const likerUsername = req.body.likerUsername; // passed from frontend
+
+    if (!likerUsername) return res.status(400).json({ error: 'likerUsername required' });
+
+    // add liker to interestedUsers if not already there
+    const updated = await User.findOneAndUpdate(
+      { username: normalized },
+      { $addToSet: { interestedUsers: String(likerUsername).trim().toLowerCase() } },
+      { new: true }
+    );
+
+    if (!updated) return res.status(404).json({ error: 'user not found' });
+    
+    // Check if this creates a mutual match and update matchedUsers if so
+    const likerUser = await User.findOne({ username: String(likerUsername).trim().toLowerCase() });
+    if (likerUser && updated.interestedUsers.includes(likerUsername)) {
+      // mutual like detected: add to both users' matchedUsers
+      if (!updated.matchedUsers.includes(likerUsername)) {
+        await User.findOneAndUpdate(
+          { username: normalized },
+          { $addToSet: { matchedUsers: String(likerUsername).trim().toLowerCase() } }
+        );
+      }
+      if (likerUser && !likerUser.matchedUsers.includes(normalized)) {
+        await User.findOneAndUpdate(
+          { username: String(likerUsername).trim().toLowerCase() },
+          { $addToSet: { matchedUsers: normalized } }
+        );
+      }
+    }
+    
+    res.json({ success: true, interestedUsers: updated.interestedUsers });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

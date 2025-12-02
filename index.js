@@ -45,9 +45,29 @@ if (require.main === module) {
 module.exports = { app, start };
 
 // Serve per-user page for any username path (after static and API handlers)
+// Serve per-user page for any username path (after static and API handlers)
 app.get('/:username', (req, res) => {
   const { username } = req.params;
   // don't override API paths or static assets — only serve for plain username-like paths
   if (username.startsWith('api') || username.includes('.')) return res.status(404).end();
+
+  // If the client has a session cookie `meetcute_user`, enforce that they can only access their own page.
+  const rawCookies = req.headers.cookie || '';
+  const cookies = rawCookies.split(';').map(c => c.trim()).reduce((acc, pair) => {
+    const [k, ...v] = pair.split('=');
+    if (!k) return acc;
+    acc[k] = decodeURIComponent((v || []).join('='));
+    return acc;
+  }, {});
+
+  if (cookies.meetcute_user) {
+    const loggedIn = String(cookies.meetcute_user).trim();
+    if (loggedIn && loggedIn !== username) {
+      // Forbidden — logged in user attempting to view another user's page
+      res.status(403).send(`<html><body style="font-family:Inter,Arial,sans-serif;background:#07102a;color:#e6eef6;display:flex;align-items:center;justify-content:center;height:100vh"><div style="padding:20px;border-radius:8px;background:#061029">Forbidden — you are logged in as <strong>${loggedIn}</strong>. <a href="/${encodeURIComponent(loggedIn)}" style="color:#ffd1b8">Go to your page</a></div></body></html>`);
+      return;
+    }
+  }
+
   res.sendFile(require('path').join(__dirname, 'public', 'user.html'));
 });
