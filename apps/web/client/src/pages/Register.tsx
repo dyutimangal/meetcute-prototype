@@ -4,72 +4,43 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { ArrowLeft } from "lucide-react";
 
-const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+const USERNAME_REGEX = /^[a-zA-Z0-9_-]{2,32}$/;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function Register() {
   const [, setLocation] = useLocation();
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
-  const [avatarDataUrl, setAvatarDataUrl] = useState("");
-  const [avatarName, setAvatarName] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleAvatarChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (file.size > MAX_AVATAR_BYTES) {
-      setAvatarDataUrl("");
-      setAvatarName("");
-      setError("Image is too large. Please upload a PNG or JPEG under 5MB.");
-      return;
-    }
-    if (file.type && !file.type.startsWith("image/")) {
-      setAvatarDataUrl("");
-      setAvatarName("");
-      setError("Please upload a PNG or JPEG image.");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
-      if (!result) {
-        setError("Unable to read the image file. Please try another photo.");
-        return;
-      }
-      setAvatarDataUrl(result);
-      setAvatarName(file.name);
-      setError(null);
-    };
-    reader.onerror = () => {
-      setError("Unable to read the image file. Please try another photo.");
-    };
-    reader.readAsDataURL(file);
-  };
-
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || !email.trim()) {
-      alert("Please fill in all fields");
-      return;
-    }
-    if (!avatarDataUrl) {
-      setError("Please upload a profile photo to continue.");
-      return;
-    }
-
-    setIsLoading(true);
     setError(null);
+    const usernameValue = username.trim();
+    const emailValue = email.trim();
+    if (!usernameValue || !emailValue) {
+      setError("Please fill in all fields.");
+      return;
+    }
+    if (!USERNAME_REGEX.test(usernameValue)) {
+      setError("Username must be 2-32 characters and use letters, numbers, - or _.");
+      return;
+    }
+    if (!EMAIL_REGEX.test(emailValue)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+    setIsLoading(true);
     try {
-      const normalizedUsername = username.trim().toLowerCase();
-      const normalizedEmail = email.trim().toLowerCase();
+      const normalizedUsername = usernameValue.toLowerCase();
+      const normalizedEmail = emailValue.toLowerCase();
       const response = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           username: normalizedUsername,
           email: normalizedEmail,
-          avatar: avatarDataUrl,
         }),
       });
 
@@ -144,38 +115,6 @@ export default function Register() {
                 className="w-full border-2 border-black rounded-none font-body text-base py-3 px-4"
                 disabled={isLoading}
               />
-            </div>
-
-            {/* Profile Photo */}
-            <div className="space-y-2">
-              <label className="block text-sm font-bold text-foreground font-body">
-                Profile Photo
-              </label>
-              <div className="flex items-center gap-4">
-                <div className="h-20 w-20 border-2 border-black bg-muted/30 flex items-center justify-center overflow-hidden">
-                  {avatarDataUrl ? (
-                    <img
-                      src={avatarDataUrl}
-                      alt="Profile preview"
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <span className="text-xs text-muted-foreground font-body">Upload</span>
-                  )}
-                </div>
-                <div className="flex-1 space-y-1">
-                  <Input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleAvatarChange}
-                    className="w-full border-2 border-black rounded-none font-body text-sm py-2 px-3"
-                    disabled={isLoading}
-                  />
-                  <p className="text-xs text-muted-foreground font-body">
-                    PNG or JPEG, up to 5MB{avatarName ? ` · ${avatarName}` : ""}.
-                  </p>
-                </div>
-              </div>
             </div>
 
             {/* Email Input */}

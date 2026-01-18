@@ -26,6 +26,8 @@ type ApiUser = {
 
 const PROMPT_PLACEHOLDER = "I am too lazy for this shit";
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const AGE_MIN = 18;
+const AGE_MAX = 99;
 
 const DEFAULT_PROMPTS = {
   lookingFor: "",
@@ -35,6 +37,9 @@ const DEFAULT_PROMPTS = {
 };
 
 const INTEREST_OPTIONS = ["girls", "guys", "non-binary"];
+const ALLOWED_INTENTIONS = new Set(["dating", "friendship"]);
+const ALLOWED_IDENTIFICATIONS = new Set(["male", "female", "non-binary"]);
+const ALLOWED_INTERESTED_IN = new Set(INTEREST_OPTIONS);
 
 interface Profile {
   id: string;
@@ -81,6 +86,25 @@ const formatLabelValue = (value?: string | number) => {
   if (value === null || typeof value === "undefined" || value === "") return "—";
   return String(value);
 };
+
+const normalizeIntentionValue = (value: string) => {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "friends" || normalized === "friend") return "friendship";
+  return normalized;
+};
+
+const parseAgeInput = (value: string, label: string) => {
+  const trimmed = String(value ?? "").trim();
+  if (trimmed === "") return { error: `${label} is required.` };
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed)) return { error: `${label} must be a whole number.` };
+  if (parsed < AGE_MIN || parsed > AGE_MAX) {
+    return { error: `${label} must be between ${AGE_MIN} and ${AGE_MAX}.` };
+  }
+  return { value: parsed };
+};
+
+const dedupeList = (values: string[]) => Array.from(new Set(values));
 
 const normalizeInterestedInValue = (value: string) => {
   const normalized = value.toLowerCase();
@@ -230,6 +254,8 @@ export default function Home() {
   const [editIntention, setEditIntention] = useState<string[]>([]);
   const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [setupImage, setSetupImage] = useState("");
   const imageInputId = useId();
   const secondaryImageInputId = useId();
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
@@ -248,8 +274,8 @@ export default function Home() {
     preferredAgeMax: "",
   });
   const [filters, setFilters] = useState<FilterState>({
-    ageMin: 18,
-    ageMax: 65,
+    ageMin: AGE_MIN,
+    ageMax: Math.min(65, AGE_MAX),
     intention: "all",
     interestedInYou: false,
     matchedWith: false,
@@ -377,45 +403,100 @@ export default function Home() {
   }, [selectedProfile, currentUserProfile]);
 
   const handleSetupComplete = async () => {
-    if (!setupData.age || setupData.intention.length === 0 || !setupData.identification || setupData.interestedIn.length === 0 || !setupData.preferredAgeMin || !setupData.preferredAgeMax) {
-      alert("Please fill in all fields");
+    setSetupError(null);
+    const ageResult = parseAgeInput(setupData.age, "Age");
+    if (ageResult.error) {
+      setSetupError(ageResult.error);
       return;
     }
-    // Save setup data with user-specific key
-    const storedUser = localStorage.getItem("meetCuteUser");
-    const setupKey = `meetCuteUserSetup_${storedUser}`;
-    localStorage.setItem(setupKey, JSON.stringify(setupData));
-    // Also save a flag that setup is complete
-    localStorage.setItem("meetCuteUserSetup", "true");
-    setShowSetupModal(false);
+    if (setupData.intention.length === 0) {
+      setSetupError("Please select what you're looking for.");
+      return;
+    }
+    const normalizedIntention = dedupeList(
+      setupData.intention.map((value) => normalizeIntentionValue(value))
+    );
+    if (normalizedIntention.some((value) => !ALLOWED_INTENTIONS.has(value))) {
+      setSetupError("Please select a valid intention.");
+      return;
+    }
+    const normalizedGender = String(setupData.identification || "").trim().toLowerCase();
+    if (!ALLOWED_IDENTIFICATIONS.has(normalizedGender)) {
+      setSetupError("Please select how you identify.");
+      return;
+    }
+    if (setupData.interestedIn.length === 0) {
+      setSetupError("Please select who you're into.");
+      return;
+    }
+    const normalizedInterestedIn = dedupeList(
+      setupData.interestedIn.map((value) => normalizeInterestedInValue(value))
+    );
+    if (normalizedInterestedIn.some((value) => !ALLOWED_INTERESTED_IN.has(value))) {
+      setSetupError("Please select a valid interest.");
+      return;
+    }
+    const minResult = parseAgeInput(setupData.preferredAgeMin, "Preferred min age");
+    if (minResult.error) {
+      setSetupError(minResult.error);
+      return;
+    }
+    const maxResult = parseAgeInput(setupData.preferredAgeMax, "Preferred max age");
+    if (maxResult.error) {
+      setSetupError(maxResult.error);
+      return;
+    }
+    if (minResult.value > maxResult.value) {
+      setSetupError("Preferred max age must be greater than or equal to min age.");
+      return;
+    }
 
     const stored = getStoredUser();
-    if (stored?.username) {
-      try {
-        const updatedFields = {
-          age: Number(setupData.age),
-          gender: setupData.identification,
-          interestedIn: setupData.interestedIn,
-        };
-        await fetch(`/api/users/${encodeURIComponent(stored.username)}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            age: updatedFields.age,
-            gender: updatedFields.gender,
-            intention: setupData.intention,
-            interestedIn: updatedFields.interestedIn,
-            preferredAgeRange: {
-              min: Number(setupData.preferredAgeMin),
-              max: Number(setupData.preferredAgeMax),
-            },
-          }),
-        });
-        setCurrentUserProfile((prev) => (prev ? { ...prev, ...updatedFields } : prev));
-        setSelectedProfile((prev) => (prev && prev.id === stored.username ? { ...prev, ...updatedFields } : prev));
-      } catch (err) {
-        console.error(err);
+    if (!stored?.username) {
+      setSetupError("Unable to find your account. Please log in again.");
+      return;
+    }
+
+    try {
+      const updatedFields = {
+        age: ageResult.value,
+        gender: normalizedGender,
+        interestedIn: normalizedInterestedIn,
+        intention: normalizedIntention,
+      };
+      const response = await fetch(`/api/users/${encodeURIComponent(stored.username)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          age: updatedFields.age,
+          gender: updatedFields.gender,
+          intention: updatedFields.intention,
+          interestedIn: updatedFields.interestedIn,
+          preferredAgeRange: {
+            min: minResult.value,
+            max: maxResult.value,
+          },
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setSetupError(payload?.error || "Unable to save your profile.");
+        return;
       }
+      // Save setup data with user-specific key
+      const storedUser = localStorage.getItem("meetCuteUser");
+      const setupKey = `meetCuteUserSetup_${storedUser}`;
+      localStorage.setItem(setupKey, JSON.stringify(setupData));
+      // Also save a flag that setup is complete
+      localStorage.setItem("meetCuteUserSetup", "true");
+      setShowSetupModal(false);
+      setCurrentUserProfile((prev) => (prev ? { ...prev, ...updatedFields } : prev));
+      setSelectedProfile((prev) =>
+        prev && prev.id === stored.username ? { ...prev, ...updatedFields } : prev
+      );
+    } catch (err) {
+      console.error(err);
+      setSetupError("Unable to save your profile. Please try again.");
     }
   };
 
@@ -527,28 +608,74 @@ export default function Home() {
     );
   };
 
-  const readImageFile = (file: File, onLoad: (dataUrl: string) => void) => {
+  const readImageFile = (
+    file: File,
+    onLoad: (dataUrl: string) => void,
+    onError?: (message: string) => void
+  ) => {
+    const reportError = (message: string) => {
+      if (onError) {
+        onError(message);
+      } else {
+        setProfileSaveError(message);
+      }
+    };
     if (file.size > MAX_IMAGE_BYTES) {
-      setProfileSaveError("Image is too large. Please upload a PNG or JPEG under 5MB.");
+      reportError("Image is too large. Please upload a PNG or JPEG under 5MB.");
       return;
     }
     if (file.type && !file.type.startsWith("image/")) {
-      setProfileSaveError("Please upload a PNG or JPEG image.");
+      reportError("Please upload a PNG or JPEG image.");
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
       const result = typeof reader.result === "string" ? reader.result : "";
       if (!result) {
-        setProfileSaveError("Unable to read the image file. Please try another photo.");
+        reportError("Unable to read the image file. Please try another photo.");
         return;
       }
       onLoad(result);
     };
     reader.onerror = () => {
-      setProfileSaveError("Unable to read the image file. Please try another photo.");
+      reportError("Unable to read the image file. Please try another photo.");
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleSetupImageUpload = async (dataUrl: string) => {
+    const stored = getStoredUser();
+    if (!stored?.username) {
+      setSetupError("Unable to find your account. Please log in again.");
+      return;
+    }
+    setSetupError(null);
+    try {
+      const response = await fetch(`/api/users/${encodeURIComponent(stored.username)}/avatar`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ avatar: dataUrl }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message =
+          payload?.error ||
+          (response.status === 413
+            ? "Image is too large. Please upload a smaller PNG or JPEG."
+            : `Upload failed (${response.status}). Please try again.`);
+        setSetupError(message);
+        return;
+      }
+      const nextImage = payload.avatar || dataUrl;
+      setSetupImage(nextImage);
+      setCurrentUserProfile((prev) => (prev ? { ...prev, image: nextImage } : prev));
+      setSelectedProfile((prev) =>
+        prev && prev.id === stored.username ? { ...prev, image: nextImage } : prev
+      );
+    } catch (err) {
+      console.error(err);
+      setSetupError("Unable to upload image. Please check your connection and try again.");
+    }
   };
 
   const handleSaveProfile = async () => {
@@ -712,8 +839,8 @@ export default function Home() {
                     <h3 className="font-display text-lg text-foreground">Age Range</h3>
                     <div className="space-y-3">
                       <Slider
-                        min={18}
-                        max={65}
+                        min={AGE_MIN}
+                        max={AGE_MAX}
                         step={1}
                         value={[filters.ageMin, filters.ageMax]}
                         onValueChange={(value) =>
@@ -860,13 +987,54 @@ export default function Home() {
                 <label className="block text-sm font-bold text-foreground font-body">Your Age</label>
                 <Input
                   type="number"
-                  min="18"
-                  max="100"
+                  min={AGE_MIN}
+                  max={AGE_MAX}
+                  step="1"
                   placeholder="Enter your age"
                   value={setupData.age}
                   onChange={(e) => setSetupData({ ...setupData, age: e.target.value })}
                   className="w-full border-2 border-black rounded-none font-body"
                 />
+              </div>
+
+              {/* Profile Photo */}
+              <div className="space-y-2">
+                <label className="block text-sm font-bold text-foreground font-body">Profile Photo</label>
+                <div className="flex items-center gap-4">
+                  <div className="h-20 w-20 border-2 border-black bg-muted/30 flex items-center justify-center overflow-hidden">
+                    {setupImage || currentUserProfile?.image ? (
+                      <img
+                        src={setupImage || currentUserProfile?.image}
+                        alt="Profile preview"
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-xs text-muted-foreground font-body">Upload</span>
+                    )}
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <Input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        setSetupError(null);
+                        readImageFile(
+                          file,
+                          (result) => {
+                            handleSetupImageUpload(result);
+                          },
+                          (message) => setSetupError(message)
+                        );
+                      }}
+                      className="w-full border-2 border-black rounded-none font-body text-sm py-2 px-3"
+                    />
+                    <p className="text-xs text-muted-foreground font-body">
+                      PNG or JPEG, up to 5MB.
+                    </p>
+                  </div>
+                </div>
               </div>
 
               {/* Intention Field */}
@@ -931,22 +1099,24 @@ export default function Home() {
                 <div className="flex gap-3 items-end">
                   <div className="flex-1">
                     <label className="text-xs text-muted-foreground font-body">Min</label>
-                      <Input
-                        type="number"
-                        min="18"
-                        max="100"
-                        placeholder="Min"
-                        value={setupData.preferredAgeMin}
-                        onChange={(e) => setSetupData({ ...setupData, preferredAgeMin: e.target.value })}
-                        className="w-full border-2 border-black rounded-none font-body"
-                      />
+                    <Input
+                      type="number"
+                      min={AGE_MIN}
+                      max={AGE_MAX}
+                      step="1"
+                      placeholder="Min"
+                      value={setupData.preferredAgeMin}
+                      onChange={(e) => setSetupData({ ...setupData, preferredAgeMin: e.target.value })}
+                      className="w-full border-2 border-black rounded-none font-body"
+                    />
                   </div>
                   <div className="flex-1">
                     <label className="text-xs text-muted-foreground font-body">Max</label>
                     <Input
                       type="number"
-                      min="18"
-                      max="100"
+                      min={AGE_MIN}
+                      max={AGE_MAX}
+                      step="1"
                       placeholder="Max"
                       value={setupData.preferredAgeMax}
                       onChange={(e) => setSetupData({ ...setupData, preferredAgeMax: e.target.value })}
@@ -957,6 +1127,9 @@ export default function Home() {
               </div>
 
               {/* Complete Button */}
+              {setupError && (
+                <p className="text-sm text-red-600 font-body">{setupError}</p>
+              )}
               <Button
                 onClick={handleSetupComplete}
                 className="w-full bg-accent text-accent-foreground border-2 border-black rounded-none font-bold py-3 hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-shadow"
