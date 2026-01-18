@@ -18,17 +18,23 @@ pnpm install
 
 Copy `.env.example` -> `.env` and change MONGODB_URI if needed.
 
-3. Run the app (API + Web)
+3. Run the app
 
 ```bash
 # development (API + web)
 pnpm dev
 
 # API only
+pnpm dev:api
+
+# web only
+pnpm dev:web
+
+# production API (no frontend)
 pnpm start
 
-# production/start (builds web first)
-pnpm start:prod
+# build frontend assets for static hosting
+pnpm build:web
 ```
 
 4. Quick sanity check (no DB required)
@@ -43,18 +49,17 @@ pnpm -C apps/api test:quick
 
 Basic API
 
-- GET / — basic hello
- - GET / — landing page with username signup
- - GET /api/users — list users (returns [] if DB empty)
- - POST /api/users — create an account (body: { "username": "alice", "email": "alice@example.com" })
- - GET /api/users/:username — fetch user by username
+- GET /api — basic hello
+- GET /api/users — list users (returns [] if DB empty)
+- POST /api/users — create an account (body: { "username": "alice", "email": "alice@example.com", "avatar": "data:image/png;base64,..." })
+- GET /api/users/:username — fetch user by username
+- PUT /api/users/:username — update profile/preferences
 
-Username signup flow
+Frontend (apps/web)
 
-1. Open the landing page (http://localhost:3000) and enter a username.
-2. The page will attempt to create the account by POSTing `{ username, email }` to `/api/users`.
-	 - If the username+email matches an existing account you'll be redirected to `/<username>`.
-	 - If the username already exists with a different email you'll be asked to choose another username (or check the email you entered).
+- Vite dev server runs on http://localhost:5173 by default.
+- API requests are proxied from the web app to http://localhost:3000.
+- Build output lands in `apps/web/dist/public` for static hosting.
 
 Username rules & notes
 
@@ -64,14 +69,14 @@ Username rules & notes
 
 User profile & matching
 
-After you sign up and are at `/<username>`, you can edit your profile preferences from the landing/profile page. The profile fields available are:
+The web app lets users edit their profile preferences. The profile fields available are:
 
 - `intention` (array) — multi-select values including: `dating`, `friendship`
 - `interestedIn` (array) — multi-select values including: `girls`, `guys`, `non-binary`
 - `age` (integer)
 - `preferredAgeRange` (min/max integers)
 
-The personal page (`/<username>`) will show how many other users match your preferences (and a visual list of icons). The server filters other users based on your `preferredAgeRange` and — if set — will prefer users matching your `intention` and `interestedIn` selections.
+The server filters other users based on `minAge`/`maxAge` query params and, when provided, `intention` and `interestedIn` filters.
 
 Note: usernames are immutable once created and are case-insensitive (stored lowercased). If you need to change your username later we'll add an account/edit flow with authentication — for now usernames cannot be updated via the API.
 
@@ -85,12 +90,12 @@ curl -X PUT http://localhost:3000/api/users/alice \
 
 Manual test examples
 
-Create an account with curl (username + email):
+Create an account with curl (username + email + avatar):
 
 ```bash
 curl -X POST http://localhost:3000/api/users \
 	-H "Content-Type: application/json" \
-	-d '{"username":"alice","email":"alice@example.com"}'
+	-d '{"username":"alice","email":"alice@example.com","avatar":"data:image/png;base64,iVBORw0..."}'
 
 # expected: 201 created and JSON user returned
 ```
@@ -100,17 +105,6 @@ Fetch the user:
 ```bash
 curl http://localhost:3000/api/users/alice
 ```
-
-Open your personal page in the browser:
-
-```
-http://localhost:3000/alice
-```
-
-Example: create a user with curl
-
-```bash
-curl -X POST http://localhost:3000/api/users -H "Content-Type: application/json" -d '{"name":"Alice","email":"alice@example.com"}'
 
 Deleting existing users / cleanup
 
@@ -126,7 +120,6 @@ node apps/api/scripts/clear-users.js --confirm
 - Or use the Mongo shell or Atlas UI to delete documents from the `users` collection.
 
 If your database has problematic existing indexes (e.g., several documents with null emails colliding with a unique index), you may need to clean the documents first or drop and recreate indexes in the Atlas UI or using the mongo shell.
-```
 
 How it is structured
 
@@ -169,7 +162,7 @@ Debugging notes & troubleshooting
 ```bash
 curl -X POST http://localhost:3000/api/users \
 	-H "Content-Type: application/json" \
-	-d '{"name":"Bob","email":"bob@example.com"}'
+	-d '{"username":"bob","email":"bob@example.com","avatar":"data:image/png;base64,iVBORw0..."}'
 ```
 
 Where to go from here

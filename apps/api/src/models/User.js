@@ -1,17 +1,14 @@
 const mongoose = require('mongoose');
 
-const DEFAULT_PROMPTS = {
-  lookingFor: 'Someone who loves spontaneous adventures and good conversations over coffee.',
-  idealWeekend: 'Hiking in the morning, farmers market for lunch, and a movie night at home.',
-  superpower: 'I can make anyone laugh and I am great at giving genuine advice to friends.',
-  petPeeve: 'People who do not listen actively or are always on their phones during conversations.'
-};
+const PROMPT_PLACEHOLDER = 'I am too lazy for this shit';
+const AGE_MIN = 18;
+const AGE_MAX = 99;
 
 const promptsSchema = new mongoose.Schema({
-  lookingFor: { type: String, default: DEFAULT_PROMPTS.lookingFor },
-  idealWeekend: { type: String, default: DEFAULT_PROMPTS.idealWeekend },
-  superpower: { type: String, default: DEFAULT_PROMPTS.superpower },
-  petPeeve: { type: String, default: DEFAULT_PROMPTS.petPeeve }
+  lookingFor: { type: String, default: PROMPT_PLACEHOLDER },
+  idealWeekend: { type: String, default: PROMPT_PLACEHOLDER },
+  superpower: { type: String, default: PROMPT_PLACEHOLDER },
+  petPeeve: { type: String, default: PROMPT_PLACEHOLDER }
 }, { _id: false });
 
 const userSchema = new mongoose.Schema({
@@ -30,6 +27,8 @@ const userSchema = new mongoose.Schema({
   gender: { type: String, enum: ['male', 'female', 'non-binary'], required: false },
   // optional avatar (data URL or remote URL). If not provided, auto-generated from username initial.
   avatar: { type: String, required: false },
+  // optional secondary avatar/image
+  avatarSecondary: { type: String, required: false },
   // prompts for profile questions
   prompts: { type: promptsSchema, default: () => ({}) },
   // list of usernames this user has liked
@@ -39,11 +38,38 @@ const userSchema = new mongoose.Schema({
   // list of usernames this user has matched with (mutual likes)
   matchedUsers: { type: [String], default: [] },
   // 'age' — user's age as integer
-  age: { type: Number, required: false },
+  age: {
+    type: Number,
+    required: false,
+    min: AGE_MIN,
+    max: AGE_MAX,
+    validate: {
+      validator: (value) => value == null || Number.isInteger(value),
+      message: 'age must be an integer'
+    }
+  },
   // 'preferredAgeRange' — [min, max]
   preferredAgeRange: {
-    min: { type: Number, default: 18 },
-    max: { type: Number, default: 99 }
+    min: {
+      type: Number,
+      default: AGE_MIN,
+      min: AGE_MIN,
+      max: AGE_MAX,
+      validate: {
+        validator: (value) => value == null || Number.isInteger(value),
+        message: 'preferredAgeRange.min must be an integer'
+      }
+    },
+    max: {
+      type: Number,
+      default: AGE_MAX,
+      min: AGE_MIN,
+      max: AGE_MAX,
+      validate: {
+        validator: (value) => value == null || Number.isInteger(value),
+        message: 'preferredAgeRange.max must be an integer'
+      }
+    }
   },
 
   createdAt: { type: Date, default: Date.now }
@@ -60,6 +86,13 @@ userSchema.pre('save', function (next) {
     this.avatar = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
   }
   next();
+});
+
+userSchema.pre('validate', function (next) {
+  const range = this.preferredAgeRange;
+  if (!range || range.min == null || range.max == null) return next();
+  if (range.min <= range.max) return next();
+  return next(new Error('preferredAgeRange min must be less than or equal to max'));
 });
 
 module.exports = mongoose.model('User', userSchema);

@@ -3,31 +3,15 @@ require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
 const express = require('express');
 const morgan = require('morgan');
 const mongoose = require('mongoose');
-const fs = require('fs');
-
 const userRoutes = require('./src/routes/users');
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '2000mb' }));
 app.use(morgan('tiny'));
 
-// Serve static landing page from /public
-// Prefer serving built front-end (apps/web), with legacy fallbacks
-const clientDistCandidates = [
-  process.env.FRONTEND_DIST ? path.resolve(process.env.FRONTEND_DIST) : null,
-  path.resolve(__dirname, '..', 'web', 'dist', 'public'),
-].filter(Boolean);
-const clientDist = clientDistCandidates.find(candidate => {
-  return fs.existsSync(path.join(candidate, 'index.html'));
+app.get('/', (req, res) => {
+  res.json({ message: 'MeetCute API' });
 });
-const clientIndex = clientDist ? path.join(clientDist, 'index.html') : null;
-
-if (clientDist) {
-  console.log('Serving client from', clientDist);
-  app.use(express.static(clientDist));
-} else {
-  app.use(express.static(path.join(__dirname, 'public')));
-}
 
 // API root fallback if requested specifically
 app.get('/api', (req, res) => {
@@ -59,21 +43,3 @@ if (require.main === module) {
 }
 
 module.exports = { app, start };
-
-// Serve per-user page for any username path (after static and API handlers)
-// For any non-API route (user-facing routes / SPA routes) serve the client index.html
-app.get('*', (req, res) => {
-  // Let API routes 404/forward as normal
-  if (req.path.startsWith('/api')) return res.status(404).end();
-
-  // Prefer serving built client index.html if available
-  if (clientIndex && fs.existsSync(clientIndex)) {
-    return res.sendFile(clientIndex);
-  }
-
-  // Fallback to legacy per-user HTML if present
-  const legacyUser = path.join(__dirname, 'public', 'user.html');
-  if (fs.existsSync(legacyUser)) return res.sendFile(legacyUser);
-
-  res.status(404).end();
-});
