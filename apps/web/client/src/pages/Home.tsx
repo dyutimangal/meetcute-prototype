@@ -6,30 +6,33 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { profiles as seedProfiles } from "@/lib/data";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bell, Filter, Heart, Maximize2, MessageCircle, Send, X } from "lucide-react";
-import { useState, useEffect } from "react";
+import { Bell, Filter, Heart, ImagePlus, Maximize2, MessageCircle, Send, X } from "lucide-react";
+import { useState, useEffect, useId } from "react";
 
 type ApiUser = {
   username?: string;
   email?: string;
   avatar?: string;
+  avatarSecondary?: string;
   age?: number;
   gender?: string;
   interestedIn?: string[];
+  intention?: string[];
   prompts?: Record<string, string>;
   likedYou?: boolean;
   likedByYou?: boolean;
   matchStatus?: "default" | "liked" | "matched";
 };
 
+const PROMPT_PLACEHOLDER = "I am too lazy for this shit";
+
 const DEFAULT_PROMPTS = {
-  lookingFor: "Someone who loves spontaneous adventures and good conversations over coffee.",
-  idealWeekend: "Hiking in the morning, farmers market for lunch, and a movie night at home.",
-  superpower: "I can make anyone laugh and I am great at giving genuine advice to friends.",
-  petPeeve: "People who do not listen actively or are always on their phones during conversations.",
+  lookingFor: "",
+  idealWeekend: "",
+  superpower: "",
+  petPeeve: "",
 };
 
-const GENDER_OPTIONS = ["male", "female", "non-binary"];
 const INTEREST_OPTIONS = ["girls", "guys", "non-binary"];
 
 interface Profile {
@@ -37,9 +40,11 @@ interface Profile {
   name: string;
   description: string;
   image?: string;
+  imageSecondary?: string;
   age?: number;
   gender?: string;
   interestedIn?: string[];
+  intention?: string[];
   prompts?: Record<keyof typeof DEFAULT_PROMPTS, string>;
   likedYou?: boolean;
   likedByYou?: boolean;
@@ -60,14 +65,35 @@ const mergePrompts = (
   ...(prompts || {}),
 });
 
+const isProfileComplete = (user?: ApiUser) => {
+  if (!user) return false;
+  const hasAge = typeof user.age === "number" && !Number.isNaN(user.age);
+  const hasGender = Boolean(user.gender);
+  const hasIntention = Array.isArray((user as any).intention) && (user as any).intention.length > 0;
+  const hasInterestedIn = Array.isArray(user.interestedIn) && user.interestedIn.length > 0;
+  const range = (user as any).preferredAgeRange || {};
+  const hasRange = typeof range.min === "number" && typeof range.max === "number";
+  return hasAge && hasGender && hasIntention && hasInterestedIn && hasRange;
+};
+
 const formatLabelValue = (value?: string | number) => {
   if (value === null || typeof value === "undefined" || value === "") return "—";
   return String(value);
 };
 
+const normalizeInterestedInValue = (value: string) => {
+  const normalized = value.toLowerCase();
+  if (normalized === "male") return "guys";
+  if (normalized === "female") return "girls";
+  if (normalized === "nonbinary") return "non-binary";
+  return normalized;
+};
+
 const formatListValue = (value?: string[]) => {
   if (!value || value.length === 0) return "—";
-  return value.map((item) => item.replace(/-/g, " ")).join(", ");
+  return value
+    .map((item) => normalizeInterestedInValue(item).replace(/-/g, " "))
+    .join(", ");
 };
 
 const getStoredUser = () => {
@@ -197,12 +223,14 @@ export default function Home() {
   const [profilesError, setProfilesError] = useState<string | null>(null);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editImage, setEditImage] = useState("");
+  const [editImageSecondary, setEditImageSecondary] = useState("");
   const [editPrompts, setEditPrompts] = useState<Record<keyof typeof DEFAULT_PROMPTS, string>>(DEFAULT_PROMPTS);
-  const [editAge, setEditAge] = useState("");
-  const [editGender, setEditGender] = useState("");
   const [editInterestedIn, setEditInterestedIn] = useState<string[]>([]);
+  const [editIntention, setEditIntention] = useState<string[]>([]);
   const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const imageInputId = useId();
+  const secondaryImageInputId = useId();
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     { id: 1, sender: "other", text: "Hey! How are you doing?" },
     { id: 2, sender: "user", text: "I'm doing great! How about you?" },
@@ -227,22 +255,12 @@ export default function Home() {
   });
 
   useEffect(() => {
-    // Check if user has completed setup
-    const stored = getStoredUser();
-    if (stored?.raw) {
-      const setupKey = `meetCuteUserSetup_${stored.raw}`;
-      const userSetup = localStorage.getItem(setupKey);
-      if (!userSetup) {
-        setShowSetupModal(true);
-      }
-    }
-  }, []);
-
-  useEffect(() => {
     const stored = getStoredUser();
     if (!stored?.username) return;
+    let cancelled = false;
 
     const loadUsers = async () => {
+      if (cancelled) return;
       setProfilesError(null);
       try {
         const params = new URLSearchParams();
@@ -262,15 +280,18 @@ export default function Home() {
 
         if (meResponse.ok) {
           const meUser = (await meResponse.json()) as ApiUser;
+          setShowSetupModal(!isProfileComplete(meUser));
           const template = pickSeedProfile(stored.username, 0);
           setCurrentUserProfile({
             id: stored.username,
             name: stored.username,
             description: "This is you.",
             image: meUser.avatar || template?.image || "",
+            imageSecondary: meUser.avatarSecondary || "",
             age: meUser.age,
             gender: meUser.gender,
             interestedIn: meUser.interestedIn,
+            intention: meUser.intention,
             prompts: mergePrompts(meUser.prompts),
           });
         } else {
@@ -298,9 +319,11 @@ export default function Home() {
                   name: username,
                   description: template?.description || "MeetCute user.",
                   image: user.avatar || template?.image || "",
+                  imageSecondary: user.avatarSecondary || "",
                   age: user.age,
                   gender: user.gender,
                   interestedIn: user.interestedIn,
+                  intention: user.intention,
                   prompts: mergePrompts(user.prompts),
                   likedYou: user.likedYou,
                   likedByYou: user.likedByYou,
@@ -324,22 +347,29 @@ export default function Home() {
       }
     };
 
+    if (showSetupModal || isFullScreen || selectedProfile) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
     loadUsers();
-  }, [filters]);
+    const interval = setInterval(loadUsers, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [filters, showSetupModal, isFullScreen, selectedProfile]);
 
   useEffect(() => {
     if (!selectedProfile) return;
     const currentId = currentUserProfile?.id || "you";
     if (selectedProfile.id === currentId) {
       setEditImage(selectedProfile.image || "");
+      setEditImageSecondary(selectedProfile.imageSecondary || "");
       setEditPrompts(mergePrompts(selectedProfile.prompts));
-      setEditAge(
-        typeof selectedProfile.age === "number" && !Number.isNaN(selectedProfile.age)
-          ? String(selectedProfile.age)
-          : ""
-      );
-      setEditGender(selectedProfile.gender || "");
       setEditInterestedIn(selectedProfile.interestedIn || []);
+      setEditIntention((selectedProfile as any).intention || []);
     }
     setIsEditingProfile(false);
     setProfileSaveError(null);
@@ -432,49 +462,46 @@ export default function Home() {
     y: number;
   }>;
 
-  const handleLike = async (profileId: string) => {
+  const toggleLike = async (profileId: string) => {
     const stored = getStoredUser();
     if (!stored?.username) return;
-    if (likedProfiles.has(profileId)) return;
+    const wasLiked = likedProfiles.has(profileId);
+    const prevLiked = new Set(likedProfiles);
+    const prevProfiles = profiles;
 
     const nextLiked = new Set(likedProfiles);
-    nextLiked.add(profileId);
+    if (wasLiked) {
+      nextLiked.delete(profileId);
+    } else {
+      nextLiked.add(profileId);
+    }
     setLikedProfiles(nextLiked);
+    setProfiles((prev) =>
+      prev.map((profile) => {
+        if (profile.id !== profileId) return profile;
+        const likedByYou = !wasLiked;
+        const matchStatus = likedByYou && profile.likedYou ? "matched" : likedByYou ? "liked" : "default";
+        return { ...profile, likedByYou, matchStatus };
+      })
+    );
 
     try {
       const response = await fetch(`/api/users/${encodeURIComponent(profileId)}/like`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ likerUsername: stored.username }),
+        body: JSON.stringify({ likerUsername: stored.username, action: wasLiked ? "unlike" : "like" }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        setLikedProfiles((prev) => {
-          const updated = new Set(prev);
-          updated.delete(profileId);
-          return updated;
-        });
+        setLikedProfiles(prevLiked);
+        setProfiles(prevProfiles);
         setProfilesError(payload?.error || "Unable to like user.");
         return;
       }
-      setProfiles((prev) =>
-        prev.map((profile) => {
-          if (profile.id !== profileId) return profile;
-          const nextStatus = profile.likedYou ? "matched" : "liked";
-          return {
-            ...profile,
-            likedByYou: true,
-            matchStatus: nextStatus,
-          };
-        })
-      );
     } catch (err) {
       console.error(err);
-      setLikedProfiles((prev) => {
-        const updated = new Set(prev);
-        updated.delete(profileId);
-        return updated;
-      });
+      setLikedProfiles(prevLiked);
+      setProfiles(prevProfiles);
       setProfilesError("Unable to like user.");
     }
   };
@@ -505,19 +532,16 @@ export default function Home() {
     setIsSavingProfile(true);
     setProfileSaveError(null);
     try {
-      const normalizedAge = editAge.trim();
-      const payloadAge = normalizedAge === "" ? null : Number(normalizedAge);
-      const response = await fetch(`/api/users/${encodeURIComponent(stored.username)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          avatar: editImage,
-          age: payloadAge,
-          gender: editGender,
-          interestedIn: editInterestedIn,
-          prompts: editPrompts,
-        }),
-      });
+    const response = await fetch(`/api/users/${encodeURIComponent(stored.username)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        avatar: editImage,
+        intention: editIntention,
+        interestedIn: editInterestedIn,
+        prompts: editPrompts,
+      }),
+    });
 
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -526,14 +550,13 @@ export default function Home() {
       }
 
       const updatedPrompts = mergePrompts(payload.prompts || editPrompts);
-      const updatedProfile = {
-        ...activeCurrentUser,
-        image: payload.avatar || editImage || activeCurrentUser.image,
-        age: payload.age ?? payloadAge ?? activeCurrentUser.age,
-        gender: payload.gender ?? editGender ?? activeCurrentUser.gender,
-        interestedIn: payload.interestedIn ?? editInterestedIn ?? activeCurrentUser.interestedIn,
-        prompts: updatedPrompts,
-      };
+    const updatedProfile = {
+      ...activeCurrentUser,
+      image: payload.avatar || editImage || activeCurrentUser.image,
+      interestedIn: payload.interestedIn ?? editInterestedIn ?? activeCurrentUser.interestedIn,
+      intention: payload.intention ?? editIntention ?? (activeCurrentUser as any).intention,
+      prompts: updatedPrompts,
+    };
       setCurrentUserProfile(updatedProfile);
       setSelectedProfile(updatedProfile);
       setIsEditingProfile(false);
@@ -542,6 +565,46 @@ export default function Home() {
       setProfileSaveError("Unable to save profile.");
     } finally {
       setIsSavingProfile(false);
+    }
+  };
+
+  const handleImageUpload = async (dataUrl: string, kind: "primary" | "secondary") => {
+    const stored = getStoredUser();
+    if (!stored?.username) return;
+    setProfileSaveError(null);
+    try {
+      const endpoint =
+        kind === "secondary" ? "avatar-secondary" : "avatar";
+      const body =
+        kind === "secondary" ? { avatarSecondary: dataUrl } : { avatar: dataUrl };
+      const response = await fetch(`/api/users/${encodeURIComponent(stored.username)}/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setProfileSaveError(payload?.error || "Unable to upload image.");
+        return;
+      }
+      if (kind === "secondary") {
+        const nextImage = payload.avatarSecondary || dataUrl;
+        setEditImageSecondary(nextImage);
+        setCurrentUserProfile((prev) => (prev ? { ...prev, imageSecondary: nextImage } : prev));
+        setSelectedProfile((prev) =>
+          prev && prev.id === stored.username ? { ...prev, imageSecondary: nextImage } : prev
+        );
+      } else {
+        const nextImage = payload.avatar || dataUrl;
+        setEditImage(nextImage);
+        setCurrentUserProfile((prev) => (prev ? { ...prev, image: nextImage } : prev));
+        setSelectedProfile((prev) =>
+          prev && prev.id === stored.username ? { ...prev, image: nextImage } : prev
+        );
+      }
+    } catch (err) {
+      console.error(err);
+      setProfileSaveError("Unable to upload image.");
     }
   };
 
@@ -818,7 +881,7 @@ export default function Home() {
               <div className="space-y-3">
                 <label className="block text-sm font-bold text-foreground font-body">Who You Are Into</label>
                 <div className="space-y-2">
-                  {["Male", "Female", "Non-binary"].map((option) => (
+                  {["Girls", "Guys", "Non-binary"].map((option) => (
                     <label key={option} className="flex items-center gap-3 cursor-pointer">
                       <input
                         type="checkbox"
@@ -1049,7 +1112,7 @@ export default function Home() {
                 </button>
               ) : (
                 <button
-                  onClick={() => handleLike(selectedProfile.id)}
+                  onClick={() => toggleLike(selectedProfile.id)}
                   className="absolute bottom-4 left-4 w-10 h-10 rounded-full bg-white border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center hover:scale-110 transition-transform z-50"
                 >
                   <Heart
@@ -1110,6 +1173,36 @@ export default function Home() {
                   alt="Profile"
                   className="w-full h-full object-cover"
                 />
+                {selectedProfile.id === activeCurrentUser.id && (
+                  <>
+                    <input
+                      id={imageInputId}
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files && e.target.files[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          const result = typeof reader.result === "string" ? reader.result : "";
+                          if (result) {
+                            setIsEditingProfile(true);
+                            handleImageUpload(result, "primary");
+                          }
+                        };
+                        reader.readAsDataURL(file);
+                      }}
+                      className="hidden"
+                    />
+                    <label
+                      htmlFor={imageInputId}
+                      className="absolute bottom-3 right-3 flex items-center justify-center w-10 h-10 rounded-full bg-background/90 border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] cursor-pointer hover:scale-105 transition-transform"
+                      title="Edit image"
+                    >
+                      <ImagePlus className="h-5 w-5 text-foreground" />
+                    </label>
+                  </>
+                )}
               </div>
 
               {/* Profile Details */}
@@ -1119,36 +1212,28 @@ export default function Home() {
                   <h2 className="font-display text-2xl text-foreground">{selectedProfile.name}</h2>
                   {isEditingProfile && selectedProfile.id === activeCurrentUser.id ? (
                     <div className="space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground font-body mb-1">
-                            Age
+                            Looking for
                           </label>
-                          <Input
-                            type="number"
-                            min="18"
-                            max="100"
-                            value={editAge}
-                            onChange={(e) => setEditAge(e.target.value)}
-                            className="w-full border-2 border-black rounded-none font-body text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground font-body mb-1">
-                            Gender
-                          </label>
-                          <select
-                            value={editGender}
-                            onChange={(e) => setEditGender(e.target.value)}
-                            className="w-full border-2 border-black rounded-none font-body text-sm bg-background px-2 py-2"
-                          >
-                            <option value="">Select</option>
-                            {GENDER_OPTIONS.map((option) => (
-                              <option key={option} value={option}>
-                                {option}
-                              </option>
+                          <div className="space-y-2">
+                            {["dating", "friendship"].map((option) => (
+                              <label key={option} className="flex items-center gap-2 text-sm font-body">
+                                <Checkbox
+                                  checked={editIntention.includes(option)}
+                                  onCheckedChange={() =>
+                                    setEditIntention((prev) =>
+                                      prev.includes(option)
+                                        ? prev.filter((item) => item !== option)
+                                        : [...prev, option]
+                                    )
+                                  }
+                                />
+                                <span>{option}</span>
+                              </label>
                             ))}
-                          </select>
+                          </div>
                         </div>
                         <div>
                           <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground font-body mb-1">
@@ -1179,24 +1264,59 @@ export default function Home() {
                       <span className="inline-flex items-center bg-muted/30 border-2 border-black px-3 py-1 text-xs font-bold uppercase tracking-wider">
                         Interested in: {formatListValue(selectedProfile.interestedIn)}
                       </span>
+                      <span className="inline-flex items-center bg-muted/30 border-2 border-black px-3 py-1 text-xs font-bold uppercase tracking-wider">
+                        Looking for: {formatListValue((selectedProfile as any).intention)}
+                      </span>
                     </div>
                   )}
                 </div>
 
-                {isEditingProfile && selectedProfile.id === activeCurrentUser.id && (
-                  <div className="space-y-2">
-                    <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground font-body">
-                      Profile image URL
-                    </label>
-                    <Input
-                      type="text"
-                      value={editImage}
-                      onChange={(e) => setEditImage(e.target.value)}
-                      className="w-full border-2 border-black rounded-none font-body text-sm"
-                      placeholder="https://..."
+                {/* Second Image */}
+                <div className="w-full aspect-square bg-gradient-to-br from-muted to-muted/20 relative overflow-hidden flex items-center justify-center border-2 border-black">
+                  {selectedProfile.imageSecondary ? (
+                    <img
+                      src={
+                        isEditingProfile && selectedProfile.id === activeCurrentUser.id
+                          ? editImageSecondary || selectedProfile.imageSecondary
+                          : selectedProfile.imageSecondary
+                      }
+                      alt="Secondary profile"
+                      className="w-full h-full object-cover"
                     />
-                  </div>
-                )}
+                  ) : (
+                    <p className="text-sm text-muted-foreground font-body">No second image yet</p>
+                  )}
+                  {selectedProfile.id === activeCurrentUser.id && (
+                    <>
+                      <input
+                        id={secondaryImageInputId}
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => {
+                          const file = e.target.files && e.target.files[0];
+                          if (!file) return;
+                          const reader = new FileReader();
+                          reader.onload = () => {
+                            const result = typeof reader.result === "string" ? reader.result : "";
+                            if (result) {
+                              setIsEditingProfile(true);
+                              handleImageUpload(result, "secondary");
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                        }}
+                        className="hidden"
+                      />
+                      <label
+                        htmlFor={secondaryImageInputId}
+                        className="absolute bottom-3 right-3 flex items-center justify-center w-10 h-10 rounded-full bg-background/90 border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] cursor-pointer hover:scale-105 transition-transform"
+                        title="Edit second image"
+                      >
+                        <ImagePlus className="h-5 w-5 text-foreground" />
+                      </label>
+                    </>
+                  )}
+                </div>
 
                 {/* Prompts Section */}
                 <div className="space-y-4">
@@ -1212,10 +1332,11 @@ export default function Home() {
                           value={editPrompts[key]}
                           onChange={(e) => handlePromptChange(key, e.target.value)}
                           className="w-full min-h-[72px] border-2 border-black rounded-none font-body text-sm p-2 bg-background"
+                          placeholder={PROMPT_PLACEHOLDER}
                         />
                       ) : (
                         <p className="text-base text-foreground font-body">
-                          {mergePrompts(selectedProfile.prompts)[key]}
+                          {mergePrompts(selectedProfile.prompts)[key] || PROMPT_PLACEHOLDER}
                         </p>
                       )}
                     </div>
@@ -1224,14 +1345,6 @@ export default function Home() {
                   {profileSaveError && (
                     <p className="text-sm text-red-600 font-body">{profileSaveError}</p>
                   )}
-                </div>
-
-                {/* Description */}
-                <div className="bg-muted/30 border-2 border-black p-4 rounded-none">
-                  <h3 className="font-display text-lg text-foreground mb-2">About</h3>
-                  <p className="text-base text-muted-foreground font-body leading-relaxed">
-                    {selectedProfile.description || "MeetCute user."}
-                  </p>
                 </div>
 
                 {/* Spacer for scrolling */}
@@ -1256,14 +1369,10 @@ export default function Home() {
                       onClick={() => {
                         setIsEditingProfile(false);
                         setEditImage(selectedProfile.image || "");
+                        setEditImageSecondary(selectedProfile.imageSecondary || "");
                         setEditPrompts(mergePrompts(selectedProfile.prompts));
-                        setEditAge(
-                          typeof selectedProfile.age === "number" && !Number.isNaN(selectedProfile.age)
-                            ? String(selectedProfile.age)
-                            : ""
-                        );
-                        setEditGender(selectedProfile.gender || "");
                         setEditInterestedIn(selectedProfile.interestedIn || []);
+                        setEditIntention((selectedProfile as any).intention || []);
                       }}
                       className="flex-1 border-2 border-black rounded-none font-bold"
                     >
@@ -1280,7 +1389,7 @@ export default function Home() {
                 )
               ) : (
                 <Button 
-                  onClick={() => handleLike(selectedProfile.id)}
+                  onClick={() => toggleLike(selectedProfile.id)}
                   className={`flex-1 border-2 border-black rounded-none font-bold transition-all ${
                     likedProfiles.has(selectedProfile.id)
                       ? "bg-secondary text-secondary-foreground"
