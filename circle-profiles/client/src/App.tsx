@@ -1,7 +1,7 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
-import { Route, Switch } from "wouter";
+import { Route, Switch, useLocation } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 
 
 function Router() {
+  const [location, setLocation] = useLocation();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -21,7 +22,7 @@ function Router() {
       setIsAuthenticated(true);
     }
     setIsLoading(false);
-  }, []);
+  }, [location]);
 
   if (isLoading) {
     return (
@@ -41,14 +42,14 @@ function Router() {
       <Route path={"/"} component={Register} />
       <Route path={"/*"} component={() => {
         if (!isAuthenticated) {
-          window.location.href = "/login";
+          setLocation("/login");
           return null;
         }
         return (
           <Switch>
             <Route path={"/user"} component={Home} />
             <Route path={"/"} component={() => {
-              window.location.href = "/user";
+              setLocation("/user");
               return null;
             }} />
             <Route path={"/404"} component={NotFound} />

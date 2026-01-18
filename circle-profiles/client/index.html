@@ -17,7 +17,7 @@
     <script type="module" src="/src/main.tsx"></script>
     <script type="module">
       // Load analytics only when Vite env variables are present.
-      // This avoids Vite warnings about undefined %VITE_*% placeholders
+      // This avoids Vite warnings about undefined env placeholders
       // and prevents malformed URI errors when those env vars are not set.
       const endpoint = import.meta.env.VITE_ANALYTICS_ENDPOINT;
       const websiteId = import.meta.env.VITE_ANALYTICS_WEBSITE_ID;

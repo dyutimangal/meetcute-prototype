@@ -9,6 +9,7 @@ export default function Login() {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -16,15 +17,47 @@ export default function Login() {
       alert("Please fill in all fields");
       return;
     }
-    
+
     setIsLoading(true);
-    // Simulate login delay
-    setTimeout(() => {
-      // Store user info in localStorage
-      localStorage.setItem("meetCuteUser", JSON.stringify({ username, email }));
-      setLocation("/");
+    setError(null);
+    try {
+      const normalizedUsername = username.trim().toLowerCase();
+      const normalizedEmail = email.trim().toLowerCase();
+      const response = await fetch(`/api/users/${encodeURIComponent(normalizedUsername)}`);
+      if (!response.ok) {
+        const contentType = response.headers.get("content-type") || "";
+        const payload = contentType.includes("application/json")
+          ? await response.json().catch(() => null)
+          : await response.text().catch(() => "");
+        if (response.status === 404) {
+          setError("Account not found. Please sign up first.");
+        } else if (payload && typeof payload === "object" && "error" in payload) {
+          setError(String(payload.error));
+        } else if (payload && typeof payload === "string") {
+          setError(payload);
+        } else {
+          setError(`Login failed (${response.status}). Please try again.`);
+        }
+        return;
+      }
+
+      const user = await response.json();
+      if (!user?.email || String(user.email).toLowerCase() !== normalizedEmail) {
+        setError("Email does not match this username.");
+        return;
+      }
+
+      localStorage.setItem(
+        "meetCuteUser",
+        JSON.stringify({ username: user.username || normalizedUsername, email: user.email || normalizedEmail })
+      );
+      setLocation("/user");
+    } catch (err) {
+      console.error(err);
+      setError("Network error. Please try again.");
+    } finally {
       setIsLoading(false);
-    }, 500);
+    }
   };
 
 
@@ -97,6 +130,11 @@ export default function Login() {
                 {isLoading ? "Loading..." : "Login"}
               </Button>
             </div>
+            {error && (
+              <p className="text-sm text-red-600 font-body" role="alert">
+                {error}
+              </p>
+            )}
           </form>
 
           {/* Divider */}

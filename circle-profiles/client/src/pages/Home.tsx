@@ -4,10 +4,171 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
-import { currentUser, profiles, type Profile } from "@/lib/data";
+import { profiles as seedProfiles } from "@/lib/data";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bell, Filter, Heart, Maximize2, MessageCircle, Send, X } from "lucide-react";
 import { useState, useEffect } from "react";
+
+type ApiUser = {
+  username?: string;
+  email?: string;
+  avatar?: string;
+  age?: number;
+  gender?: string;
+  interestedIn?: string[];
+  prompts?: Record<string, string>;
+  likedYou?: boolean;
+  likedByYou?: boolean;
+  matchStatus?: "default" | "liked" | "matched";
+};
+
+const DEFAULT_PROMPTS = {
+  lookingFor: "Someone who loves spontaneous adventures and good conversations over coffee.",
+  idealWeekend: "Hiking in the morning, farmers market for lunch, and a movie night at home.",
+  superpower: "I can make anyone laugh and I am great at giving genuine advice to friends.",
+  petPeeve: "People who do not listen actively or are always on their phones during conversations.",
+};
+
+const GENDER_OPTIONS = ["male", "female", "non-binary"];
+const INTEREST_OPTIONS = ["girls", "guys", "non-binary"];
+
+interface Profile {
+  id: string;
+  name: string;
+  description: string;
+  image?: string;
+  age?: number;
+  gender?: string;
+  interestedIn?: string[];
+  prompts?: Record<keyof typeof DEFAULT_PROMPTS, string>;
+  likedYou?: boolean;
+  likedByYou?: boolean;
+  matchStatus?: "default" | "liked" | "matched";
+}
+
+const PROMPT_LABELS: Array<{ key: keyof typeof DEFAULT_PROMPTS; label: string }> = [
+  { key: "lookingFor", label: "Looking for..." },
+  { key: "idealWeekend", label: "Ideal weekend" },
+  { key: "superpower", label: "My superpower" },
+  { key: "petPeeve", label: "Pet peeve" },
+];
+
+const mergePrompts = (
+  prompts?: Record<string, string>
+): Record<keyof typeof DEFAULT_PROMPTS, string> => ({
+  ...DEFAULT_PROMPTS,
+  ...(prompts || {}),
+});
+
+const formatLabelValue = (value?: string | number) => {
+  if (value === null || typeof value === "undefined" || value === "") return "—";
+  return String(value);
+};
+
+const formatListValue = (value?: string[]) => {
+  if (!value || value.length === 0) return "—";
+  return value.map((item) => item.replace(/-/g, " ")).join(", ");
+};
+
+const getStoredUser = () => {
+  const raw = localStorage.getItem("meetCuteUser");
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const username = parsed?.username ? String(parsed.username).trim().toLowerCase() : "";
+    const email = parsed?.email ? String(parsed.email).trim().toLowerCase() : "";
+    return { raw, username, email };
+  } catch {
+    return { raw, username: raw.trim().toLowerCase(), email: "" };
+  }
+};
+
+const pickSeedProfile = (key: string, index: number) => {
+  if (seedProfiles.length === 0) return null;
+  if (!key) return seedProfiles[index % seedProfiles.length];
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) {
+    hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  }
+  return seedProfiles[hash % seedProfiles.length];
+};
+
+const BASE_RING_COUNTS = [6, 8, 11];
+
+const buildRings = (total: number) => {
+  const rings: Array<{ radius: number; count: number }> = [];
+  const baseRadius = 150;
+  const spacing = 120;
+  const minSlots = Math.max(total, BASE_RING_COUNTS.reduce((sum, n) => sum + n, 0));
+  let remaining = minSlots;
+  let ringIndex = 0;
+  while (remaining > 0) {
+    const baseCount =
+      BASE_RING_COUNTS[ringIndex] ??
+      BASE_RING_COUNTS[BASE_RING_COUNTS.length - 1] + (ringIndex - BASE_RING_COUNTS.length + 1) * 2;
+    rings.push({ radius: baseRadius + ringIndex * spacing, count: baseCount });
+    remaining -= baseCount;
+    ringIndex += 1;
+  }
+  return rings;
+};
+
+const buildRingSlotsByRing = (rings: Array<{ radius: number; count: number }>) => {
+  return rings.map((ring, ringIndex) => {
+    return Array.from({ length: ring.count }, (_, slotIndex) => ({
+      ringIndex,
+      slotIndex,
+      ringCount: ring.count,
+      radius: ring.radius,
+      angle: (slotIndex / ring.count) * 2 * Math.PI,
+    }));
+  });
+};
+
+const hashSeed = (value: string) => {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+function seededShuffle<T>(items: T[], seedKey: string) {
+  const arr = [...items];
+  let seed = hashSeed(seedKey || "seed");
+  const random = () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function interleaveSlots<T>(slotsByRing: T[][], seedKey: string) {
+  const shuffledByRing = slotsByRing.map((slots, ringIndex) =>
+    seededShuffle(slots, `${seedKey}|ring:${ringIndex}`)
+  );
+  const result: T[] = [];
+  let offset = 0;
+  let added = true;
+  while (added) {
+    added = false;
+    for (const ringSlots of shuffledByRing) {
+      if (offset < ringSlots.length) {
+        result.push(ringSlots[offset]);
+        added = true;
+      }
+    }
+    offset += 1;
+  }
+  return result;
+}
 
 interface FilterState {
   ageMin: number;
@@ -26,11 +187,22 @@ interface ChatMessage {
 export default function Home() {
   const [selectedProfile, setSelectedProfile] = useState<Profile | null>(null);
   const [isFullScreen, setIsFullScreen] = useState(false);
-  const [likedProfiles, setLikedProfiles] = useState<Set<number>>(new Set());
+  const [likedProfiles, setLikedProfiles] = useState<Set<string>>(new Set());
   const [showFilter, setShowFilter] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [chatProfile, setChatProfile] = useState<Profile | null>(null);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [currentUserProfile, setCurrentUserProfile] = useState<Profile | null>(null);
+  const [profilesError, setProfilesError] = useState<string | null>(null);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editImage, setEditImage] = useState("");
+  const [editPrompts, setEditPrompts] = useState<Record<keyof typeof DEFAULT_PROMPTS, string>>(DEFAULT_PROMPTS);
+  const [editAge, setEditAge] = useState("");
+  const [editGender, setEditGender] = useState("");
+  const [editInterestedIn, setEditInterestedIn] = useState<string[]>([]);
+  const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     { id: 1, sender: "other", text: "Hey! How are you doing?" },
     { id: 2, sender: "user", text: "I'm doing great! How about you?" },
@@ -56,9 +228,9 @@ export default function Home() {
 
   useEffect(() => {
     // Check if user has completed setup
-    const currentUser = localStorage.getItem("meetCuteUser");
-    if (currentUser) {
-      const setupKey = `meetCuteUserSetup_${currentUser}`;
+    const stored = getStoredUser();
+    if (stored?.raw) {
+      const setupKey = `meetCuteUserSetup_${stored.raw}`;
       const userSetup = localStorage.getItem(setupKey);
       if (!userSetup) {
         setShowSetupModal(true);
@@ -66,18 +238,154 @@ export default function Home() {
     }
   }, []);
 
-  const handleSetupComplete = () => {
+  useEffect(() => {
+    const stored = getStoredUser();
+    if (!stored?.username) return;
+
+    const loadUsers = async () => {
+      setProfilesError(null);
+      try {
+        const params = new URLSearchParams();
+        params.set("exclude", stored.username);
+        params.set("minAge", String(filters.ageMin));
+        params.set("maxAge", String(filters.ageMax));
+        if (filters.intention === "friend") {
+          params.set("intention", "friendship,friends");
+        }
+        if (filters.intention === "date") {
+          params.set("intention", "dating");
+        }
+        const [meResponse, usersResponse] = await Promise.all([
+          fetch(`/api/users/${encodeURIComponent(stored.username)}`),
+          fetch(`/api/users?${params.toString()}`),
+        ]);
+
+        if (meResponse.ok) {
+          const meUser = (await meResponse.json()) as ApiUser;
+          const template = pickSeedProfile(stored.username, 0);
+          setCurrentUserProfile({
+            id: stored.username,
+            name: stored.username,
+            description: "This is you.",
+            image: meUser.avatar || template?.image || "",
+            age: meUser.age,
+            gender: meUser.gender,
+            interestedIn: meUser.interestedIn,
+            prompts: mergePrompts(meUser.prompts),
+          });
+        } else {
+          setCurrentUserProfile({
+            id: stored.username,
+            name: stored.username,
+            description: "This is you.",
+            image: "",
+            prompts: mergePrompts(),
+          });
+        }
+
+        if (!usersResponse.ok) {
+          throw new Error(`Failed to load users (${usersResponse.status})`);
+        }
+        const list = (await usersResponse.json()) as ApiUser[];
+        const mapped = Array.isArray(list)
+          ? list
+              .filter((user) => user && user.username)
+              .map((user, index) => {
+                const username = String(user.username);
+                const template = pickSeedProfile(username, index);
+                return {
+                  id: username,
+                  name: username,
+                  description: template?.description || "MeetCute user.",
+                  image: user.avatar || template?.image || "",
+                  age: user.age,
+                  gender: user.gender,
+                  interestedIn: user.interestedIn,
+                  prompts: mergePrompts(user.prompts),
+                  likedYou: user.likedYou,
+                  likedByYou: user.likedByYou,
+                  matchStatus: user.matchStatus,
+                };
+              })
+          : [];
+        setLikedProfiles(new Set(mapped.filter((profile) => profile.likedByYou).map((profile) => profile.id)));
+
+        let filtered = mapped;
+        if (filters.interestedInYou) {
+          filtered = filtered.filter((profile) => profile.likedYou);
+        }
+        if (filters.matchedWith) {
+          filtered = filtered.filter((profile) => profile.matchStatus === "matched");
+        }
+        setProfiles(filtered);
+      } catch (err) {
+        console.error(err);
+        setProfilesError("Unable to load users.");
+      }
+    };
+
+    loadUsers();
+  }, [filters]);
+
+  useEffect(() => {
+    if (!selectedProfile) return;
+    const currentId = currentUserProfile?.id || "you";
+    if (selectedProfile.id === currentId) {
+      setEditImage(selectedProfile.image || "");
+      setEditPrompts(mergePrompts(selectedProfile.prompts));
+      setEditAge(
+        typeof selectedProfile.age === "number" && !Number.isNaN(selectedProfile.age)
+          ? String(selectedProfile.age)
+          : ""
+      );
+      setEditGender(selectedProfile.gender || "");
+      setEditInterestedIn(selectedProfile.interestedIn || []);
+    }
+    setIsEditingProfile(false);
+    setProfileSaveError(null);
+  }, [selectedProfile, currentUserProfile]);
+
+  const handleSetupComplete = async () => {
     if (!setupData.age || setupData.intention.length === 0 || !setupData.identification || setupData.interestedIn.length === 0 || !setupData.preferredAgeMin || !setupData.preferredAgeMax) {
       alert("Please fill in all fields");
       return;
     }
     // Save setup data with user-specific key
-    const currentUser = localStorage.getItem("meetCuteUser");
-    const setupKey = `meetCuteUserSetup_${currentUser}`;
+    const storedUser = localStorage.getItem("meetCuteUser");
+    const setupKey = `meetCuteUserSetup_${storedUser}`;
     localStorage.setItem(setupKey, JSON.stringify(setupData));
     // Also save a flag that setup is complete
     localStorage.setItem("meetCuteUserSetup", "true");
     setShowSetupModal(false);
+
+    const stored = getStoredUser();
+    if (stored?.username) {
+      try {
+        const updatedFields = {
+          age: Number(setupData.age),
+          gender: setupData.identification,
+          interestedIn: setupData.interestedIn,
+        };
+        await fetch(`/api/users/${encodeURIComponent(stored.username)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            age: updatedFields.age,
+            gender: updatedFields.gender,
+            intention: setupData.intention,
+            interestedIn: updatedFields.interestedIn,
+            preferredAgeRange: {
+              min: Number(setupData.preferredAgeMin),
+              max: Number(setupData.preferredAgeMax),
+            },
+          }),
+        });
+        setCurrentUserProfile((prev) => (prev ? { ...prev, ...updatedFields } : prev));
+        setSelectedProfile((prev) => (prev && prev.id === stored.username ? { ...prev, ...updatedFields } : prev));
+      } catch (err) {
+        console.error(err);
+      }
+    }
   };
 
   const toggleIntention = (value: string) => {
@@ -98,21 +406,77 @@ export default function Home() {
     }));
   };
 
-  // Calculate positions for concentric circles
-  const rings = [
-    { radius: 140, count: 6, startIndex: 0 },
-    { radius: 240, count: 8, startIndex: 6 },
-    { radius: 340, count: 11, startIndex: 14 },
-  ];
+  const activeCurrentUser: Profile = currentUserProfile || {
+    id: "you",
+    name: "You",
+    description: "This is you.",
+    image: "",
+    prompts: mergePrompts(),
+  };
+  const rings = buildRings(profiles.length);
+  const ringSlotsByRing = buildRingSlotsByRing(rings);
+  const slotSeed = profiles.map((profile) => profile.id).sort().join("|");
+  const shuffledSlots = interleaveSlots(ringSlotsByRing, slotSeed);
+  const positionedProfiles = profiles
+    .map((profile, index) => {
+      const slot = shuffledSlots[index];
+      if (!slot) return null;
+      const x = Math.cos(slot.angle) * slot.radius;
+      const y = Math.sin(slot.angle) * slot.radius;
+      return { profile, slot, x, y };
+    })
+    .filter(Boolean) as Array<{
+    profile: Profile;
+    slot: { ringIndex: number; slotIndex: number; ringCount: number };
+    x: number;
+    y: number;
+  }>;
 
-  const toggleLike = (profileId: number) => {
-    const newLiked = new Set(likedProfiles);
-    if (newLiked.has(profileId)) {
-      newLiked.delete(profileId);
-    } else {
-      newLiked.add(profileId);
+  const handleLike = async (profileId: string) => {
+    const stored = getStoredUser();
+    if (!stored?.username) return;
+    if (likedProfiles.has(profileId)) return;
+
+    const nextLiked = new Set(likedProfiles);
+    nextLiked.add(profileId);
+    setLikedProfiles(nextLiked);
+
+    try {
+      const response = await fetch(`/api/users/${encodeURIComponent(profileId)}/like`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ likerUsername: stored.username }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        setLikedProfiles((prev) => {
+          const updated = new Set(prev);
+          updated.delete(profileId);
+          return updated;
+        });
+        setProfilesError(payload?.error || "Unable to like user.");
+        return;
+      }
+      setProfiles((prev) =>
+        prev.map((profile) => {
+          if (profile.id !== profileId) return profile;
+          const nextStatus = profile.likedYou ? "matched" : "liked";
+          return {
+            ...profile,
+            likedByYou: true,
+            matchStatus: nextStatus,
+          };
+        })
+      );
+    } catch (err) {
+      console.error(err);
+      setLikedProfiles((prev) => {
+        const updated = new Set(prev);
+        updated.delete(profileId);
+        return updated;
+      });
+      setProfilesError("Unable to like user.");
     }
-    setLikedProfiles(newLiked);
   };
 
   const handleSendMessage = () => {
@@ -122,6 +486,62 @@ export default function Home() {
         { id: chatMessages.length + 1, sender: "user", text: chatInput },
       ]);
       setChatInput("");
+    }
+  };
+
+  const handlePromptChange = (key: keyof typeof DEFAULT_PROMPTS, value: string) => {
+    setEditPrompts((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const toggleEditInterestedIn = (value: string) => {
+    setEditInterestedIn((prev) =>
+      prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]
+    );
+  };
+
+  const handleSaveProfile = async () => {
+    const stored = getStoredUser();
+    if (!stored?.username) return;
+    setIsSavingProfile(true);
+    setProfileSaveError(null);
+    try {
+      const normalizedAge = editAge.trim();
+      const payloadAge = normalizedAge === "" ? null : Number(normalizedAge);
+      const response = await fetch(`/api/users/${encodeURIComponent(stored.username)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          avatar: editImage,
+          age: payloadAge,
+          gender: editGender,
+          interestedIn: editInterestedIn,
+          prompts: editPrompts,
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setProfileSaveError(payload?.error || "Unable to save profile.");
+        return;
+      }
+
+      const updatedPrompts = mergePrompts(payload.prompts || editPrompts);
+      const updatedProfile = {
+        ...activeCurrentUser,
+        image: payload.avatar || editImage || activeCurrentUser.image,
+        age: payload.age ?? payloadAge ?? activeCurrentUser.age,
+        gender: payload.gender ?? editGender ?? activeCurrentUser.gender,
+        interestedIn: payload.interestedIn ?? editInterestedIn ?? activeCurrentUser.interestedIn,
+        prompts: updatedPrompts,
+      };
+      setCurrentUserProfile(updatedProfile);
+      setSelectedProfile(updatedProfile);
+      setIsEditingProfile(false);
+    } catch (err) {
+      console.error(err);
+      setProfileSaveError("Unable to save profile.");
+    } finally {
+      setIsSavingProfile(false);
     }
   };
 
@@ -148,6 +568,9 @@ export default function Home() {
             <p className="text-lg sm:text-xl text-muted-foreground font-body mt-2">
               Find people near you
             </p>
+            {profilesError && (
+              <p className="mt-2 text-xs text-red-600 font-body">{profilesError}</p>
+            )}
           </div>
 
           {/* Right: Action Buttons */}
@@ -163,6 +586,7 @@ export default function Home() {
             {/* Chat Button */}
             <button
               onClick={() => {
+                if (profiles.length === 0) return;
                 setShowChat(true);
                 setChatProfile(profiles[0]);
               }}
@@ -474,31 +898,35 @@ export default function Home() {
 
             {/* Notifications List */}
             <div className="flex-1 overflow-y-auto space-y-3 p-4">
-              {profiles.slice(0, 5).map((profile) => (
-                <motion.div
-                  key={profile.id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="p-4 border-2 border-black rounded-none bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors"
-                  onClick={() => {
-                    setChatProfile(profile);
-                    setShowChat(true);
-                    setShowNotifications(false);
-                  }}
-                >
-                  <div className="flex items-center gap-3">
-                    <img
-                      src={profile.image}
-                      alt="Profile"
-                      className="w-12 h-12 rounded-full border-2 border-black object-cover"
-                    />
-                    <div className="flex-1">
-                      <p className="font-display text-sm text-foreground">You matched!</p>
-                      <p className="text-xs text-muted-foreground font-body">Just now</p>
+              {profiles.slice(0, 5).length === 0 ? (
+                <p className="text-sm text-muted-foreground font-body">No other users yet.</p>
+              ) : (
+                profiles.slice(0, 5).map((profile) => (
+                  <motion.div
+                    key={profile.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="p-4 border-2 border-black rounded-none bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors"
+                    onClick={() => {
+                      setChatProfile(profile);
+                      setShowChat(true);
+                      setShowNotifications(false);
+                    }}
+                  >
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={profile.image}
+                        alt={profile.name}
+                        className="w-12 h-12 rounded-full border-2 border-black object-cover"
+                      />
+                      <div className="flex-1">
+                        <p className="font-display text-sm text-foreground">You matched!</p>
+                        <p className="text-xs text-muted-foreground font-body">Just now</p>
+                      </div>
                     </div>
-                  </div>
-                </motion.div>
-              ))}
+                  </motion.div>
+                ))
+              )}
             </div>
           </motion.div>
         )}
@@ -518,12 +946,12 @@ export default function Home() {
             <div 
               className="w-32 h-32 rounded-full border-4 border-primary bg-background p-1 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] cursor-pointer hover:scale-105 transition-transform duration-200"
               onClick={() => {
-                setSelectedProfile(currentUser);
+                setSelectedProfile(activeCurrentUser);
                 setIsFullScreen(false);
               }}
             >
               <Avatar className="w-full h-full">
-                <AvatarImage src={currentUser.image} alt="You" className="object-cover" />
+                <AvatarImage src={activeCurrentUser.image} alt="You" className="object-cover" />
                 <AvatarFallback className="bg-accent text-accent-foreground font-display text-2xl">ME</AvatarFallback>
               </Avatar>
             </div>
@@ -533,67 +961,55 @@ export default function Home() {
           </motion.div>
 
           {/* Concentric Rings */}
-          {rings.map((ring, ringIndex) => {
-            const ringProfiles = profiles.slice(ring.startIndex, ring.startIndex + ring.count);
-            
-            return (
-              <div key={ringIndex} className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                {/* Ring Guide Line */}
-                <div 
-                  className="absolute rounded-full border-2 border-dashed border-muted-foreground/20"
-                  style={{ width: ring.radius * 2, height: ring.radius * 2 }}
-                />
+          {rings.map((ring, ringIndex) => (
+            <div key={ringIndex} className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div
+                className="absolute rounded-full border-2 border-dashed border-muted-foreground/20"
+                style={{ width: ring.radius * 2, height: ring.radius * 2 }}
+              />
+            </div>
+          ))}
 
-                {ringProfiles.map((profile, index) => {
-                  const angle = (index / ring.count) * 2 * Math.PI;
-                  const x = Math.cos(angle) * ring.radius;
-                  const y = Math.sin(angle) * ring.radius;
+          {positionedProfiles.map(({ profile, slot, x, y }) => (
+            <motion.div
+              key={profile.id}
+              initial={{ scale: 0, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{
+                type: "spring",
+                stiffness: 260,
+                damping: 20,
+                delay: 0.1 + slot.ringIndex * 0.1 + slot.slotIndex * 0.05,
+              }}
+              className="absolute pointer-events-auto"
+              style={{
+                transform: `translate(${x}px, ${y}px)`,
+                marginLeft: x,
+                marginTop: y,
+              }}
+            >
+              <div
+                className="group relative"
+                onClick={() => {
+                  setSelectedProfile(profile);
+                  setIsFullScreen(false);
+                }}
+              >
+                <div className="w-16 h-16 rounded-full border-2 border-border bg-background p-0.5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] cursor-pointer hover:scale-110 hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] hover:border-primary transition-all duration-200 overflow-hidden">
+                  <Avatar className="w-full h-full">
+                    <AvatarImage src={profile.image} alt={profile.name} className="object-cover" />
+                    <AvatarFallback className="bg-secondary text-secondary-foreground text-xs">
+                      {profile.name.substring(0, 2).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                </div>
 
-                  return (
-                    <motion.div
-                      key={profile.id}
-                      initial={{ scale: 0, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      transition={{ 
-                        type: "spring", 
-                        stiffness: 260, 
-                        damping: 20, 
-                        delay: 0.1 + (ringIndex * 0.1) + (index * 0.05) 
-                      }}
-                      className="absolute pointer-events-auto"
-                      style={{ 
-                        transform: `translate(${x}px, ${y}px)`,
-                        marginLeft: x,
-                        marginTop: y
-                      }}
-                    >
-                      <div 
-                        className="group relative"
-                        onClick={() => {
-                          setSelectedProfile(profile);
-                          setIsFullScreen(false);
-                        }}
-                      >
-                        <div className="w-16 h-16 rounded-full border-2 border-border bg-background p-0.5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] cursor-pointer hover:scale-110 hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] hover:border-primary transition-all duration-200 overflow-hidden">
-                          <Avatar className="w-full h-full">
-                            <AvatarImage src={profile.image} alt={profile.name} className="object-cover" />
-                            <AvatarFallback className="bg-secondary text-secondary-foreground text-xs">
-                              {profile.name.substring(0, 2).toUpperCase()}
-                            </AvatarFallback>
-                          </Avatar>
-                        </div>
-                        
-                        {/* Tooltip on Hover */}
-                        <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 bg-foreground text-background text-xs px-2 py-0.5 whitespace-nowrap font-bold pointer-events-none z-50">
-                          {profile.name}
-                        </div>
-                      </div>
-                    </motion.div>
-                  );
-                })}
+                <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 opacity-100 bg-foreground text-background text-xs px-2 py-0.5 whitespace-nowrap font-bold pointer-events-none z-50">
+                  {profile.name}
+                </div>
               </div>
-            );
-          })}
+            </motion.div>
+          ))}
         </div>
       </div>
 
@@ -621,19 +1037,30 @@ export default function Home() {
                 />
               </div>
 
-              {/* Like Button (Bottom Left) */}
-              <button
-                onClick={() => toggleLike(selectedProfile.id)}
-                className="absolute bottom-4 left-4 w-10 h-10 rounded-full bg-white border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center hover:scale-110 transition-transform z-50"
-              >
-                <Heart
-                  className={`h-5 w-5 ${
-                    likedProfiles.has(selectedProfile.id)
-                      ? "fill-secondary text-secondary"
-                      : "text-black"
-                  }`}
-                />
-              </button>
+              {selectedProfile.id === activeCurrentUser.id ? (
+                <button
+                  onClick={() => {
+                    setIsEditingProfile(true);
+                    setIsFullScreen(true);
+                  }}
+                  className="absolute bottom-4 left-4 px-3 h-10 rounded-full bg-white border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center hover:scale-105 transition-transform z-50 text-xs font-bold uppercase tracking-wider"
+                >
+                  Edit
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleLike(selectedProfile.id)}
+                  className="absolute bottom-4 left-4 w-10 h-10 rounded-full bg-white border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center hover:scale-110 transition-transform z-50"
+                >
+                  <Heart
+                    className={`h-5 w-5 ${
+                      likedProfiles.has(selectedProfile.id)
+                        ? "fill-secondary text-secondary"
+                        : "text-black"
+                    }`}
+                  />
+                </button>
+              )}
 
               {/* Expand Button (Bottom Right) */}
               <button
@@ -675,7 +1102,11 @@ export default function Home() {
               {/* First Image */}
               <div className="w-full aspect-square bg-gradient-to-br from-primary to-secondary relative overflow-hidden flex items-center justify-center">
                 <img
-                  src={selectedProfile.image}
+                  src={
+                    isEditingProfile && selectedProfile.id === activeCurrentUser.id
+                      ? editImage || selectedProfile.image
+                      : selectedProfile.image
+                  }
                   alt="Profile"
                   className="w-full h-full object-cover"
                 />
@@ -683,57 +1114,123 @@ export default function Home() {
 
               {/* Profile Details */}
               <div className="p-6 space-y-6">
-                {/* Name, Title, Flag, Work */}
-                <div>
-                  <div className="flex items-center gap-3 mb-3">
-                    <span className="text-3xl">🇺🇸</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="inline-block bg-accent text-accent-foreground px-4 py-2 text-sm font-bold uppercase tracking-wider border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
-                      💼 Finance
+                {/* Profile Info */}
+                <div className="space-y-3">
+                  <h2 className="font-display text-2xl text-foreground">{selectedProfile.name}</h2>
+                  {isEditingProfile && selectedProfile.id === activeCurrentUser.id ? (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground font-body mb-1">
+                            Age
+                          </label>
+                          <Input
+                            type="number"
+                            min="18"
+                            max="100"
+                            value={editAge}
+                            onChange={(e) => setEditAge(e.target.value)}
+                            className="w-full border-2 border-black rounded-none font-body text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground font-body mb-1">
+                            Gender
+                          </label>
+                          <select
+                            value={editGender}
+                            onChange={(e) => setEditGender(e.target.value)}
+                            className="w-full border-2 border-black rounded-none font-body text-sm bg-background px-2 py-2"
+                          >
+                            <option value="">Select</option>
+                            {GENDER_OPTIONS.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground font-body mb-1">
+                            Interested in
+                          </label>
+                          <div className="space-y-2">
+                            {INTEREST_OPTIONS.map((option) => (
+                              <label key={option} className="flex items-center gap-2 text-sm font-body">
+                                <Checkbox
+                                  checked={editInterestedIn.includes(option)}
+                                  onCheckedChange={() => toggleEditInterestedIn(option)}
+                                />
+                                <span>{option}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      <span className="inline-flex items-center bg-muted/30 border-2 border-black px-3 py-1 text-xs font-bold uppercase tracking-wider">
+                        Age: {formatLabelValue(selectedProfile.age)}
+                      </span>
+                      <span className="inline-flex items-center bg-muted/30 border-2 border-black px-3 py-1 text-xs font-bold uppercase tracking-wider">
+                        Gender: {formatLabelValue(selectedProfile.gender)}
+                      </span>
+                      <span className="inline-flex items-center bg-muted/30 border-2 border-black px-3 py-1 text-xs font-bold uppercase tracking-wider">
+                        Interested in: {formatListValue(selectedProfile.interestedIn)}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
-                {/* Second Image */}
-                <div className="w-full aspect-square bg-gradient-to-br from-secondary to-accent relative overflow-hidden flex items-center justify-center border-2 border-black">
-                  <img
-                    src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=600&h=600&fit=crop"
-                    alt="Gallery"
-                    className="w-full h-full object-cover"
-                  />
-                </div>
+                {isEditingProfile && selectedProfile.id === activeCurrentUser.id && (
+                  <div className="space-y-2">
+                    <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground font-body">
+                      Profile image URL
+                    </label>
+                    <Input
+                      type="text"
+                      value={editImage}
+                      onChange={(e) => setEditImage(e.target.value)}
+                      className="w-full border-2 border-black rounded-none font-body text-sm"
+                      placeholder="https://..."
+                    />
+                  </div>
+                )}
 
                 {/* Prompts Section */}
                 <div className="space-y-4">
                   <h3 className="font-display text-lg text-foreground">Prompts</h3>
-                  
-                  <div className="bg-muted/30 border-2 border-black p-4 rounded-none">
-                    <p className="text-xs text-muted-foreground font-body uppercase tracking-wider mb-1">Looking for...</p>
-                    <p className="text-base text-foreground font-body">Someone who loves spontaneous adventures and good conversations over coffee.</p>
-                  </div>
 
-                  <div className="bg-muted/30 border-2 border-black p-4 rounded-none">
-                    <p className="text-xs text-muted-foreground font-body uppercase tracking-wider mb-1">Ideal weekend</p>
-                    <p className="text-base text-foreground font-body">Hiking in the morning, farmers market for lunch, and a movie night at home.</p>
-                  </div>
+                  {PROMPT_LABELS.map(({ key, label }) => (
+                    <div key={key} className="bg-muted/30 border-2 border-black p-4 rounded-none">
+                      <p className="text-xs text-muted-foreground font-body uppercase tracking-wider mb-1">
+                        {label}
+                      </p>
+                      {isEditingProfile && selectedProfile.id === activeCurrentUser.id ? (
+                        <textarea
+                          value={editPrompts[key]}
+                          onChange={(e) => handlePromptChange(key, e.target.value)}
+                          className="w-full min-h-[72px] border-2 border-black rounded-none font-body text-sm p-2 bg-background"
+                        />
+                      ) : (
+                        <p className="text-base text-foreground font-body">
+                          {mergePrompts(selectedProfile.prompts)[key]}
+                        </p>
+                      )}
+                    </div>
+                  ))}
 
-                  <div className="bg-muted/30 border-2 border-black p-4 rounded-none">
-                    <p className="text-xs text-muted-foreground font-body uppercase tracking-wider mb-1">My superpower</p>
-                    <p className="text-base text-foreground font-body">I can make anyone laugh and I am great at giving genuine advice to friends.</p>
-                  </div>
-
-                  <div className="bg-muted/30 border-2 border-black p-4 rounded-none">
-                    <p className="text-xs text-muted-foreground font-body uppercase tracking-wider mb-1">Pet peeve</p>
-                    <p className="text-base text-foreground font-body">People who do not listen actively or are always on their phones during conversations.</p>
-                  </div>
+                  {profileSaveError && (
+                    <p className="text-sm text-red-600 font-body">{profileSaveError}</p>
+                  )}
                 </div>
 
                 {/* Description */}
                 <div className="bg-muted/30 border-2 border-black p-4 rounded-none">
                   <h3 className="font-display text-lg text-foreground mb-2">About</h3>
                   <p className="text-base text-muted-foreground font-body leading-relaxed">
-                    {selectedProfile.description}
+                    {selectedProfile.description || "MeetCute user."}
                   </p>
                 </div>
 
@@ -744,13 +1241,46 @@ export default function Home() {
 
             {/* Sticky Footer Actions */}
             <div className="border-t-2 border-black bg-background p-4 sticky bottom-0 flex gap-3">
-              {selectedProfile.id === currentUser.id ? (
-                <Button className="flex-1 bg-foreground text-background hover:bg-foreground/90 border-2 border-transparent rounded-none font-bold">
-                  Edit Profile
-                </Button>
+              {selectedProfile.id === activeCurrentUser.id ? (
+                isEditingProfile ? (
+                  <>
+                    <Button
+                      onClick={handleSaveProfile}
+                      disabled={isSavingProfile}
+                      className="flex-1 bg-foreground text-background hover:bg-foreground/90 border-2 border-transparent rounded-none font-bold"
+                    >
+                      {isSavingProfile ? "Saving..." : "Save"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setIsEditingProfile(false);
+                        setEditImage(selectedProfile.image || "");
+                        setEditPrompts(mergePrompts(selectedProfile.prompts));
+                        setEditAge(
+                          typeof selectedProfile.age === "number" && !Number.isNaN(selectedProfile.age)
+                            ? String(selectedProfile.age)
+                            : ""
+                        );
+                        setEditGender(selectedProfile.gender || "");
+                        setEditInterestedIn(selectedProfile.interestedIn || []);
+                      }}
+                      className="flex-1 border-2 border-black rounded-none font-bold"
+                    >
+                      Cancel
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    onClick={() => setIsEditingProfile(true)}
+                    className="flex-1 bg-foreground text-background hover:bg-foreground/90 border-2 border-transparent rounded-none font-bold"
+                  >
+                    Edit Profile
+                  </Button>
+                )
               ) : (
                 <Button 
-                  onClick={() => toggleLike(selectedProfile.id)}
+                  onClick={() => handleLike(selectedProfile.id)}
                   className={`flex-1 border-2 border-black rounded-none font-bold transition-all ${
                     likedProfiles.has(selectedProfile.id)
                       ? "bg-secondary text-secondary-foreground"

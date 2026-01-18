@@ -12,9 +12,18 @@ app.use(morgan('tiny'));
 
 // Serve static landing page from /public
 const path = require('path');
-// Prefer serving built front-end from circle-profiles if present
-const clientDist = path.join(__dirname, 'circle-profiles', 'dist', 'public');
-if (fs.existsSync(clientDist)) {
+// Prefer serving built front-end (circle-profiles), with legacy fallbacks
+const clientDistCandidates = [
+  process.env.FRONTEND_DIST ? path.resolve(process.env.FRONTEND_DIST) : null,
+  path.join(__dirname, 'circle-profiles', 'dist', 'public'),
+  path.join(__dirname, 'circle-profiles', 'dist', 'public'),
+].filter(Boolean);
+const clientDist = clientDistCandidates.find(candidate => {
+  return fs.existsSync(path.join(candidate, 'index.html'));
+});
+const clientIndex = clientDist ? path.join(clientDist, 'index.html') : null;
+
+if (clientDist) {
   console.log('Serving client from', clientDist);
   app.use(express.static(clientDist));
 } else {
@@ -59,8 +68,7 @@ app.get('*', (req, res) => {
   if (req.path.startsWith('/api')) return res.status(404).end();
 
   // Prefer serving built client index.html if available
-  const clientIndex = path.join(clientDist, 'index.html');
-  if (fs.existsSync(clientIndex)) {
+  if (clientIndex && fs.existsSync(clientIndex)) {
     return res.sendFile(clientIndex);
   }
 

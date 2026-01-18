@@ -9,6 +9,7 @@ export default function Register() {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -16,16 +17,46 @@ export default function Register() {
       alert("Please fill in all fields");
       return;
     }
-    
+
     setIsLoading(true);
-    // Simulate registration delay
-    setTimeout(() => {
-      // Store user info in localStorage (auto-login)
-      localStorage.setItem("meetCuteUser", JSON.stringify({ username, email }));
+    setError(null);
+    try {
+      const normalizedUsername = username.trim().toLowerCase();
+      const normalizedEmail = email.trim().toLowerCase();
+      const response = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: normalizedUsername, email: normalizedEmail }),
+      });
+
+      const contentType = response.headers.get("content-type") || "";
+      const payload = contentType.includes("application/json")
+        ? await response.json().catch(() => null)
+        : await response.text().catch(() => "");
+
+      if (!response.ok) {
+        if (payload && typeof payload === "object" && "error" in payload) {
+          setError(String(payload.error));
+        } else if (payload && typeof payload === "string") {
+          setError(payload);
+        } else {
+          setError(`Registration failed (${response.status}). Please try again.`);
+        }
+        return;
+      }
+
+      const user = typeof payload === "object" && payload ? payload : {};
+      localStorage.setItem(
+        "meetCuteUser",
+        JSON.stringify({ username: user.username || normalizedUsername, email: user.email || normalizedEmail })
+      );
+      setLocation("/user");
+    } catch (err) {
+      console.error(err);
+      setError("Network error. Please try again.");
+    } finally {
       setIsLoading(false);
-      // Redirect to user page (will show setup modal)
-      window.location.href = "/user";
-    }, 500);
+    }
   };
 
   return (
@@ -96,6 +127,11 @@ export default function Register() {
                 {isLoading ? "Creating Account..." : "Create Account"}
               </Button>
             </div>
+            {error && (
+              <p className="text-sm text-red-600 font-body" role="alert">
+                {error}
+              </p>
+            )}
           </form>
 
           {/* Divider */}
