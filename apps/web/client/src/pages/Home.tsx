@@ -25,7 +25,7 @@ type ApiUser = {
 };
 
 const PROMPT_PLACEHOLDER = "I am too lazy for this shit";
-const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 8000;
 const AGE_MIN = 18;
 const AGE_MAX = 99;
@@ -622,7 +622,7 @@ export default function Home() {
       }
     };
     if (file.size > MAX_IMAGE_BYTES) {
-      reportError("Image is too large. Please upload a PNG or JPEG under 15MB.");
+      reportError("Image is too large. Please upload a PNG or JPEG under 50MB.");
       return;
     }
     if (file.type && !file.type.startsWith("image/")) {
@@ -1043,7 +1043,7 @@ export default function Home() {
                       className="w-full border-2 border-black rounded-none font-body text-sm py-2 px-3"
                     />
                     <p className="text-xs text-muted-foreground font-body">
-                      PNG or JPEG, up to 15MB.
+                      PNG or JPEG, up to 50MB.
                     </p>
                   </div>
                 </div>
