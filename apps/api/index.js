@@ -1,4 +1,5 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
 const express = require('express');
 const morgan = require('morgan');
 const mongoose = require('mongoose');
@@ -11,12 +12,10 @@ app.use(express.json());
 app.use(morgan('tiny'));
 
 // Serve static landing page from /public
-const path = require('path');
-// Prefer serving built front-end (circle-profiles), with legacy fallbacks
+// Prefer serving built front-end (apps/web), with legacy fallbacks
 const clientDistCandidates = [
   process.env.FRONTEND_DIST ? path.resolve(process.env.FRONTEND_DIST) : null,
-  path.join(__dirname, 'circle-profiles', 'dist', 'public'),
-  path.join(__dirname, 'circle-profiles', 'dist', 'public'),
+  path.resolve(__dirname, '..', 'web', 'dist', 'public'),
 ].filter(Boolean);
 const clientDist = clientDistCandidates.find(candidate => {
   return fs.existsSync(path.join(candidate, 'index.html'));

@@ -2,29 +2,20 @@
   "name": "meetcute-prototype",
   "version": "0.1.0",
   "private": true,
-  "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js",
-    "test": "jest --runInBand",
-    "test:quick": "node ./scripts/quick-test.js",
-    "build:client": "cd circle-profiles && pnpm build",
-    "start:prod": "npm run build:client && NODE_ENV=production node index.js",
-    "dev:client": "cd circle-profiles && pnpm dev"
+    "dev": "concurrently -n api,web -c blue,green \"pnpm dev:api\" \"pnpm dev:web\"",
+    "dev:api": "pnpm -C apps/api dev",
+    "dev:web": "pnpm -C apps/web dev",
+    "build:web": "pnpm -C apps/web build",
+    "start:prod": "pnpm build:web && NODE_ENV=production pnpm -C apps/api start",
+    "start": "pnpm -C apps/api start",
+    "test": "pnpm -C apps/api test"
   },
   "keywords": [],
   "author": "",
   "license": "MIT",
-  "dependencies": {
-    "dotenv": "^16.3.1",
-    "express": "^4.18.2",
-    "mongoose": "^7.7.0",
-    "morgan": "^1.10.0"
-  },
   "devDependencies": {
-    "nodemon": "^3.0.1",
-    "jest": "^29.6.3",
-    "supertest": "^7.0.0",
-    "mongodb-memory-server": "^8.12.2"
-  }
+    "concurrently": "^8.2.2"
+  },
+  "packageManager": "pnpm@10.4.1+sha512.c753b6c3ad7afa13af388fa6d808035a008e30ea9993f58c6663e2bc5ff21679aa834db094987129aa4d488b86df57f7b634981b2f827cdcacc698cc0cfb88af"
 }

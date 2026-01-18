@@ -3,39 +3,42 @@
 Minimal starter project: Node.js + Express + Mongoose (MongoDB) — a tiny REST API to show how to get started.
 
 Prereqs
- - Node.js (18+ recommended) and npm
+ - Node.js (18+ recommended) and pnpm
  - A MongoDB server (local or Atlas) if you want persistence
 
 Quick start
 
-1. Install dependencies
+1. Install dependencies (workspace)
 
 ```bash
-npm install
+pnpm install
 ```
 
 2. Configure environment
 
 Copy `.env.example` -> `.env` and change MONGODB_URI if needed.
 
-3. Run the app
+3. Run the app (API + Web)
 
 ```bash
-# development (auto reload)
-npm run dev
+# development (API + web)
+pnpm dev
 
-# production/start
-npm start
+# API only
+pnpm start
+
+# production/start (builds web first)
+pnpm start:prod
 ```
 
 4. Quick sanity check (no DB required)
 
 ```bash
 # run unit tests (Jest + in-memory MongoDB)
-npm test
+pnpm test
 
 # quick startup-check (old script)
-npm run test:quick
+pnpm -C apps/api test:quick
 ```
 
 Basic API
@@ -117,7 +120,7 @@ If you have old or test entries you want to remove, you can:
 
 ```bash
 # make sure .env has your MONGODB_URI then run with explicit confirmation
-node scripts/clear-users.js --confirm
+node apps/api/scripts/clear-users.js --confirm
 ```
 
 - Or use the Mongo shell or Atlas UI to delete documents from the `users` collection.
@@ -127,9 +130,10 @@ If your database has problematic existing indexes (e.g., several documents with 
 
 How it is structured
 
-- `index.js` — app/server entrypoint
-- `src/models/User.js` — a tiny Mongoose model
-- `src/routes/users.js` — example routes
+- `apps/api/index.js` — app/server entrypoint
+- `apps/api/src/models/User.js` — a tiny Mongoose model
+- `apps/api/src/routes/users.js` — example routes
+- `apps/web` — Vite + React frontend
 
 Next steps / ideas
 
@@ -173,4 +177,3 @@ Where to go from here
 - Add request validation (express-validator / zod), convert to TypeScript, or add a frontend.
 - Add authentication (Passport.js / JWT), integrate real features and UI.
 - Add automated tests and CI (GitHub Actions) to verify API behaviour.
-
