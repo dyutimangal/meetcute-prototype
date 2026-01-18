@@ -25,7 +25,8 @@ type ApiUser = {
 };
 
 const PROMPT_PLACEHOLDER = "I am too lazy for this shit";
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION = 8000;
 const AGE_MIN = 18;
 const AGE_MAX = 99;
 
@@ -621,7 +622,7 @@ export default function Home() {
       }
     };
     if (file.size > MAX_IMAGE_BYTES) {
-      reportError("Image is too large. Please upload a PNG or JPEG under 5MB.");
+      reportError("Image is too large. Please upload a PNG or JPEG under 15MB.");
       return;
     }
     if (file.type && !file.type.startsWith("image/")) {
@@ -635,7 +636,18 @@ export default function Home() {
         reportError("Unable to read the image file. Please try another photo.");
         return;
       }
-      onLoad(result);
+      const image = new Image();
+      image.onload = () => {
+        if (image.width > MAX_IMAGE_DIMENSION || image.height > MAX_IMAGE_DIMENSION) {
+          reportError(`Image dimensions must be ${MAX_IMAGE_DIMENSION}px or smaller.`);
+          return;
+        }
+        onLoad(result);
+      };
+      image.onerror = () => {
+        reportError("Unable to read the image file. Please try another photo.");
+      };
+      image.src = result;
     };
     reader.onerror = () => {
       reportError("Unable to read the image file. Please try another photo.");
@@ -1031,7 +1043,7 @@ export default function Home() {
                       className="w-full border-2 border-black rounded-none font-body text-sm py-2 px-3"
                     />
                     <p className="text-xs text-muted-foreground font-body">
-                      PNG or JPEG, up to 5MB.
+                      PNG or JPEG, up to 15MB.
                     </p>
                   </div>
                 </div>
