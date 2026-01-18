@@ -25,6 +25,7 @@ type ApiUser = {
 };
 
 const PROMPT_PLACEHOLDER = "I am too lazy for this shit";
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 const DEFAULT_PROMPTS = {
   lookingFor: "",
@@ -526,6 +527,30 @@ export default function Home() {
     );
   };
 
+  const readImageFile = (file: File, onLoad: (dataUrl: string) => void) => {
+    if (file.size > MAX_IMAGE_BYTES) {
+      setProfileSaveError("Image is too large. Please upload a PNG or JPEG under 5MB.");
+      return;
+    }
+    if (file.type && !file.type.startsWith("image/")) {
+      setProfileSaveError("Please upload a PNG or JPEG image.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      if (!result) {
+        setProfileSaveError("Unable to read the image file. Please try another photo.");
+        return;
+      }
+      onLoad(result);
+    };
+    reader.onerror = () => {
+      setProfileSaveError("Unable to read the image file. Please try another photo.");
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleSaveProfile = async () => {
     const stored = getStoredUser();
     if (!stored?.username) return;
@@ -584,7 +609,12 @@ export default function Home() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        setProfileSaveError(payload?.error || "Unable to upload image.");
+        const message =
+          payload?.error ||
+          (response.status === 413
+            ? "Image is too large. Please upload a smaller PNG or JPEG."
+            : `Upload failed (${response.status}). Please try again.`);
+        setProfileSaveError(message);
         return;
       }
       if (kind === "secondary") {
@@ -604,7 +634,7 @@ export default function Home() {
       }
     } catch (err) {
       console.error(err);
-      setProfileSaveError("Unable to upload image.");
+      setProfileSaveError("Unable to upload image. Please check your connection and try again.");
     }
   };
 
@@ -1182,15 +1212,11 @@ export default function Home() {
                       onChange={(e) => {
                         const file = e.target.files && e.target.files[0];
                         if (!file) return;
-                        const reader = new FileReader();
-                        reader.onload = () => {
-                          const result = typeof reader.result === "string" ? reader.result : "";
-                          if (result) {
-                            setIsEditingProfile(true);
-                            handleImageUpload(result, "primary");
-                          }
-                        };
-                        reader.readAsDataURL(file);
+                        setProfileSaveError(null);
+                        readImageFile(file, (result) => {
+                          setIsEditingProfile(true);
+                          handleImageUpload(result, "primary");
+                        });
                       }}
                       className="hidden"
                     />
@@ -1295,15 +1321,11 @@ export default function Home() {
                         onChange={(e) => {
                           const file = e.target.files && e.target.files[0];
                           if (!file) return;
-                          const reader = new FileReader();
-                          reader.onload = () => {
-                            const result = typeof reader.result === "string" ? reader.result : "";
-                            if (result) {
-                              setIsEditingProfile(true);
-                              handleImageUpload(result, "secondary");
-                            }
-                          };
-                          reader.readAsDataURL(file);
+                          setProfileSaveError(null);
+                          readImageFile(file, (result) => {
+                            setIsEditingProfile(true);
+                            handleImageUpload(result, "secondary");
+                          });
                         }}
                         className="hidden"
                       />
