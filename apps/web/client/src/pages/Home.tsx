@@ -7,8 +7,8 @@ import { Slider } from "@/components/ui/slider";
 import { profiles as seedProfiles } from "@/lib/data";
 import { apiUrl } from "@/lib/api";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bell, Filter, Heart, ImagePlus, Maximize2, MessageCircle, Send, X } from "lucide-react";
-import { useState, useEffect, useId } from "react";
+import { ArrowLeft, Bell, Filter, Heart, ImagePlus, Maximize2, MessageCircle, X } from "lucide-react";
+import { useState, useEffect, useId, useRef } from "react";
 
 type ApiUser = {
   username?: string;
@@ -42,6 +42,17 @@ const INTEREST_OPTIONS = ["girls", "guys", "non-binary"];
 const ALLOWED_INTENTIONS = new Set(["dating", "friendship"]);
 const ALLOWED_IDENTIFICATIONS = new Set(["male", "female", "non-binary"]);
 const ALLOWED_INTERESTED_IN = new Set(INTEREST_OPTIONS);
+const QUICK_REPLY_GROUPS = [
+  {
+    label: "Meet me at",
+    options: ["bar", "stage", "booth"],
+  },
+  {
+    label: "In",
+    options: ["5 mins", "10 mins"],
+  },
+] as const;
+const QUICK_REPLY_ACTIONS = ["Okay", "No"] as const;
 
 interface Profile {
   id: string;
@@ -245,9 +256,12 @@ export default function Home() {
   const [showChat, setShowChat] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [chatProfile, setChatProfile] = useState<Profile | null>(null);
+  const [chatView, setChatView] = useState<"list" | "thread">("list");
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [allProfiles, setAllProfiles] = useState<Profile[]>([]);
   const [currentUserProfile, setCurrentUserProfile] = useState<Profile | null>(null);
   const [profilesError, setProfilesError] = useState<string | null>(null);
+  const [hasLoadedProfiles, setHasLoadedProfiles] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editImage, setEditImage] = useState("");
   const [editImageSecondary, setEditImageSecondary] = useState("");
@@ -258,14 +272,18 @@ export default function Home() {
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [setupImage, setSetupImage] = useState("");
+  const [unreadMatchIds, setUnreadMatchIds] = useState<Set<string>>(new Set<string>());
+  const [matchToastProfile, setMatchToastProfile] = useState<Profile | null>(null);
+  const [showMatchToast, setShowMatchToast] = useState(false);
   const imageInputId = useId();
   const secondaryImageInputId = useId();
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
-    { id: 1, sender: "other", text: "Hey! How are you doing?" },
-    { id: 2, sender: "user", text: "I'm doing great! How about you?" },
-    { id: 3, sender: "other", text: "Pretty good! Would love to grab coffee sometime" },
-  ]);
-  const [chatInput, setChatInput] = useState("");
+  const prevMatchedIdsRef = useRef<Set<string>>(new Set<string>());
+  const hasInitializedMatchesRef = useRef(false);
+  const toastTimeoutRef = useRef<number | null>(null);
+  const chatSwipeStartYRef = useRef<number | null>(null);
+  const chatSwipeCurrentYRef = useRef<number | null>(null);
+  const SWIPE_CLOSE_THRESHOLD = 80;
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [showSetupModal, setShowSetupModal] = useState(false);
   const [setupData, setSetupData] = useState({
     age: "",
@@ -361,6 +379,8 @@ export default function Home() {
               })
           : [];
         setLikedProfiles(new Set(mapped.filter((profile) => profile.likedByYou).map((profile) => profile.id)));
+        setAllProfiles(mapped);
+        setHasLoadedProfiles(true);
 
         let filtered = mapped;
         if (filters.interestedInYou) {
@@ -427,15 +447,17 @@ export default function Home() {
       setSetupError("Please select how you identify.");
       return;
     }
-    if (setupData.interestedIn.length === 0) {
-      setSetupError("Please select who you're into.");
-      return;
-    }
     const normalizedInterestedIn = dedupeList(
       setupData.interestedIn.map((value) => normalizeInterestedInValue(value))
     );
     if (normalizedInterestedIn.some((value) => !ALLOWED_INTERESTED_IN.has(value))) {
       setSetupError("Please select a valid interest.");
+      return;
+    }
+    const shouldCollectInterestedIn =
+      setupData.intention.includes("dating") && !setupData.intention.includes("friends");
+    if (shouldCollectInterestedIn && normalizedInterestedIn.length === 0) {
+      setSetupError("Please select who you're into.");
       return;
     }
     const minResult = parseAgeInput(setupData.preferredAgeMin, "Preferred min age");
@@ -545,6 +567,49 @@ export default function Home() {
     x: number;
     y: number;
   }>;
+  const matchedProfiles = allProfiles.filter(
+    (profile) => profile.matchStatus === "matched" || (profile.likedYou && profile.likedByYou)
+  );
+  const showInterestedInField =
+    setupData.intention.includes("dating") && !setupData.intention.includes("friends");
+  const hasUnreadNotifications = unreadMatchIds.size > 0;
+
+  useEffect(() => {
+    if (!hasLoadedProfiles) return;
+    const currentIds = new Set(matchedProfiles.map((profile) => profile.id));
+    if (!hasInitializedMatchesRef.current) {
+      prevMatchedIdsRef.current = currentIds;
+      hasInitializedMatchesRef.current = true;
+      return;
+    }
+    const newMatches = matchedProfiles.filter((profile) => !prevMatchedIdsRef.current.has(profile.id));
+    if (newMatches.length > 0) {
+      setUnreadMatchIds((prev) => {
+        const next = new Set(prev);
+        newMatches.forEach((profile) => next.add(profile.id));
+        return next;
+      });
+      const latestMatch = newMatches[newMatches.length - 1];
+      setMatchToastProfile(latestMatch);
+      setShowMatchToast(true);
+      if (toastTimeoutRef.current) {
+        window.clearTimeout(toastTimeoutRef.current);
+      }
+      toastTimeoutRef.current = window.setTimeout(() => {
+        setShowMatchToast(false);
+      }, 4500);
+    }
+    prevMatchedIdsRef.current = currentIds;
+  }, [matchedProfiles, hasLoadedProfiles]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        window.clearTimeout(toastTimeoutRef.current);
+        toastTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const toggleLike = async (profileId: string) => {
     const stored = getStoredUser();
@@ -552,6 +617,7 @@ export default function Home() {
     const wasLiked = likedProfiles.has(profileId);
     const prevLiked = new Set(likedProfiles);
     const prevProfiles = profiles;
+    const prevAllProfiles = allProfiles;
 
     const nextLiked = new Set(likedProfiles);
     if (wasLiked) {
@@ -560,14 +626,14 @@ export default function Home() {
       nextLiked.add(profileId);
     }
     setLikedProfiles(nextLiked);
-    setProfiles((prev) =>
-      prev.map((profile) => {
-        if (profile.id !== profileId) return profile;
-        const likedByYou = !wasLiked;
-        const matchStatus = likedByYou && profile.likedYou ? "matched" : likedByYou ? "liked" : "default";
-        return { ...profile, likedByYou, matchStatus };
-      })
-    );
+    const updateLikeState = (profile: Profile) => {
+      if (profile.id !== profileId) return profile;
+      const likedByYou = !wasLiked;
+      const matchStatus = likedByYou && profile.likedYou ? "matched" : likedByYou ? "liked" : "default";
+      return { ...profile, likedByYou, matchStatus };
+    };
+    setProfiles((prev) => prev.map(updateLikeState));
+    setAllProfiles((prev) => prev.map(updateLikeState));
 
     try {
       const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(profileId)}/like`), {
@@ -579,6 +645,7 @@ export default function Home() {
         const payload = await response.json().catch(() => ({}));
         setLikedProfiles(prevLiked);
         setProfiles(prevProfiles);
+        setAllProfiles(prevAllProfiles);
         setProfilesError(payload?.error || "Unable to like user.");
         return;
       }
@@ -586,18 +653,81 @@ export default function Home() {
       console.error(err);
       setLikedProfiles(prevLiked);
       setProfiles(prevProfiles);
+      setAllProfiles(prevAllProfiles);
       setProfilesError("Unable to like user.");
     }
   };
 
-  const handleSendMessage = () => {
-    if (chatInput.trim()) {
-      setChatMessages([
-        ...chatMessages,
-        { id: chatMessages.length + 1, sender: "user", text: chatInput },
-      ]);
-      setChatInput("");
+  const markNotificationRead = (profileId: string) => {
+    setUnreadMatchIds((prev) => {
+      if (!prev.has(profileId)) return prev;
+      const next = new Set(prev);
+      next.delete(profileId);
+      return next;
+    });
+  };
+
+  const openChatWithProfile = (profile: Profile) => {
+    setChatProfile(profile);
+    setShowChat(true);
+    setShowNotifications(false);
+    setChatView("thread");
+    markNotificationRead(profile.id);
+  };
+
+  const openProfileFromNotification = (profile: Profile) => {
+    setSelectedProfile(profile);
+    setIsFullScreen(true);
+    setShowNotifications(false);
+    markNotificationRead(profile.id);
+  };
+
+  const openProfileFromChat = () => {
+    if (!chatProfile) return;
+    setSelectedProfile(chatProfile);
+    setIsFullScreen(true);
+    setShowChat(false);
+  };
+
+  const handleToggleNotifications = () => {
+    const nextValue = !showNotifications;
+    setShowNotifications(nextValue);
+    if (nextValue) {
+      setUnreadMatchIds(new Set<string>());
     }
+  };
+
+  const handleChatSwipeStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    chatSwipeStartYRef.current = event.touches[0]?.clientY ?? null;
+    chatSwipeCurrentYRef.current = chatSwipeStartYRef.current;
+  };
+
+  const handleChatSwipeMove = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (chatSwipeStartYRef.current === null) return;
+    chatSwipeCurrentYRef.current = event.touches[0]?.clientY ?? null;
+  };
+
+  const handleChatSwipeEnd = () => {
+    if (chatSwipeStartYRef.current === null || chatSwipeCurrentYRef.current === null) {
+      chatSwipeStartYRef.current = null;
+      chatSwipeCurrentYRef.current = null;
+      return;
+    }
+    const deltaY = chatSwipeCurrentYRef.current - chatSwipeStartYRef.current;
+    if (deltaY > SWIPE_CLOSE_THRESHOLD) {
+      setShowChat(false);
+    }
+    chatSwipeStartYRef.current = null;
+    chatSwipeCurrentYRef.current = null;
+  };
+
+  const handleSendMessage = (message: string) => {
+    const trimmed = message.trim();
+    if (!trimmed) return;
+    setChatMessages((prev) => [
+      ...prev,
+      { id: prev.length + 1, sender: "user", text: trimmed },
+    ]);
   };
 
   const handlePromptChange = (key: keyof typeof DEFAULT_PROMPTS, value: string) => {
@@ -810,18 +940,20 @@ export default function Home() {
           <div className="flex flex-col items-center gap-1">
             {/* Notification Button */}
             <button
-              onClick={() => setShowNotifications(!showNotifications)}
-              className="flex items-center justify-center w-8 h-8 text-foreground hover:text-primary transition-colors"
+              onClick={handleToggleNotifications}
+              className="relative flex items-center justify-center w-8 h-8 text-foreground hover:text-primary transition-colors"
             >
               <Bell className="h-5 w-5" />
+              {hasUnreadNotifications && (
+                <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-accent border-2 border-black" />
+              )}
             </button>
 
             {/* Chat Button */}
             <button
               onClick={() => {
-                if (profiles.length === 0) return;
                 setShowChat(true);
-                setChatProfile(profiles[0]);
+                setChatView("list");
               }}
               className="flex items-center justify-center w-8 h-8 text-foreground hover:text-secondary transition-colors"
             >
@@ -1050,24 +1182,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Intention Field */}
-              <div className="space-y-3">
-                <label className="block text-sm font-bold text-foreground font-body">Looking For</label>
-                <div className="space-y-2">
-                  {["Dating", "Friends"].map((option) => (
-                    <label key={option} className="flex items-center gap-3 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={setupData.intention.includes(option.toLowerCase())}
-                        onChange={() => toggleIntention(option.toLowerCase())}
-                        className="w-5 h-5 border-2 border-black cursor-pointer"
-                      />
-                      <span className="font-body text-foreground">{option}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
               {/* Identification Field */}
               <div className="space-y-3">
                 <label className="block text-sm font-bold text-foreground font-body">I Identify As</label>
@@ -1088,16 +1202,16 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Who You Are Into Field */}
+              {/* Intention Field */}
               <div className="space-y-3">
-                <label className="block text-sm font-bold text-foreground font-body">Who You Are Into</label>
+                <label className="block text-sm font-bold text-foreground font-body">Looking For</label>
                 <div className="space-y-2">
-                  {["Girls", "Guys", "Non-binary"].map((option) => (
+                  {["Dating", "Friends"].map((option) => (
                     <label key={option} className="flex items-center gap-3 cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={setupData.interestedIn.includes(option.toLowerCase())}
-                        onChange={() => toggleInterestedIn(option.toLowerCase())}
+                        checked={setupData.intention.includes(option.toLowerCase())}
+                        onChange={() => toggleIntention(option.toLowerCase())}
                         className="w-5 h-5 border-2 border-black cursor-pointer"
                       />
                       <span className="font-body text-foreground">{option}</span>
@@ -1105,6 +1219,26 @@ export default function Home() {
                   ))}
                 </div>
               </div>
+
+              {/* Who You Are Into Field */}
+              {showInterestedInField && (
+                <div className="space-y-3">
+                  <label className="block text-sm font-bold text-foreground font-body">Who You Are Into</label>
+                  <div className="space-y-2">
+                    {["Girls", "Guys", "Non-binary"].map((option) => (
+                      <label key={option} className="flex items-center gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={setupData.interestedIn.includes(option.toLowerCase())}
+                          onChange={() => toggleInterestedIn(option.toLowerCase())}
+                          className="w-5 h-5 border-2 border-black cursor-pointer"
+                        />
+                        <span className="font-body text-foreground">{option}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Preferred Age Range */}
               <div className="space-y-3">
@@ -1154,6 +1288,79 @@ export default function Home() {
         )}
       </AnimatePresence>
 
+      {/* Match Toast */}
+      <AnimatePresence>
+        {showMatchToast && matchToastProfile && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            transition={{ type: "spring", stiffness: 300, damping: 25 }}
+            className="fixed top-24 right-6 z-50 w-72 border-2 border-black bg-background shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]"
+          >
+            <div className="flex items-center justify-between border-b-2 border-black px-3 py-2">
+              <p className="font-display text-sm text-foreground">New match</p>
+              <button
+                type="button"
+                onClick={() => setShowMatchToast(false)}
+                className="flex items-center justify-center w-7 h-7 text-foreground hover:text-primary transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-3 space-y-3">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    openProfileFromNotification(matchToastProfile);
+                    setShowMatchToast(false);
+                  }}
+                  className="w-12 h-12 rounded-full border-2 border-black overflow-hidden hover:scale-105 transition-transform"
+                >
+                  <Avatar className="w-full h-full">
+                    <AvatarImage
+                      src={matchToastProfile.image}
+                      alt={matchToastProfile.name}
+                      className="object-cover"
+                    />
+                    <AvatarFallback className="bg-secondary text-secondary-foreground text-xs">
+                      {matchToastProfile.name.substring(0, 2).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                </button>
+                <div className="min-w-0">
+                  <p className="font-display text-sm text-foreground truncate">{matchToastProfile.name}</p>
+                  <p className="text-xs text-muted-foreground font-body">You matched!</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  onClick={() => {
+                    openChatWithProfile(matchToastProfile);
+                    setShowMatchToast(false);
+                  }}
+                  className="flex-1 border-2 border-black rounded-none font-bold text-xs bg-primary text-primary-foreground"
+                >
+                  Message
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    openProfileFromNotification(matchToastProfile);
+                    setShowMatchToast(false);
+                  }}
+                  className="flex-1 border-2 border-black rounded-none font-bold text-xs bg-background text-foreground"
+                >
+                  View
+                </Button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Notifications Popup */}
       <AnimatePresence>
         {showNotifications && (
@@ -1177,31 +1384,46 @@ export default function Home() {
 
             {/* Notifications List */}
             <div className="flex-1 overflow-y-auto space-y-3 p-4">
-              {profiles.slice(0, 5).length === 0 ? (
-                <p className="text-sm text-muted-foreground font-body">No other users yet.</p>
+              {matchedProfiles.length === 0 ? (
+                <p className="text-sm text-muted-foreground font-body">No matches yet.</p>
               ) : (
-                profiles.slice(0, 5).map((profile) => (
+                matchedProfiles.map((profile) => (
                   <motion.div
                     key={profile.id}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="p-4 border-2 border-black rounded-none bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors"
-                    onClick={() => {
-                      setChatProfile(profile);
-                      setShowChat(true);
-                      setShowNotifications(false);
-                    }}
+                    className="p-4 border-2 border-black rounded-none bg-muted/30 hover:bg-muted/50 transition-colors"
                   >
                     <div className="flex items-center gap-3">
-                      <img
-                        src={profile.image}
-                        alt={profile.name}
-                        className="w-12 h-12 rounded-full border-2 border-black object-cover"
-                      />
-                      <div className="flex-1">
-                        <p className="font-display text-sm text-foreground">You matched!</p>
-                        <p className="text-xs text-muted-foreground font-body">Just now</p>
+                      <button
+                        type="button"
+                        onClick={() => openProfileFromNotification(profile)}
+                        className="w-12 h-12 rounded-full border-2 border-black overflow-hidden hover:scale-105 transition-transform"
+                      >
+                        <Avatar className="w-full h-full">
+                          <AvatarImage src={profile.image} alt={profile.name} className="object-cover" />
+                          <AvatarFallback className="bg-secondary text-secondary-foreground text-xs">
+                            {profile.name.substring(0, 2).toUpperCase()}
+                          </AvatarFallback>
+                        </Avatar>
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <button
+                          type="button"
+                          onClick={() => openProfileFromNotification(profile)}
+                          className="text-left"
+                        >
+                          <p className="font-display text-sm text-foreground truncate">{profile.name}</p>
+                        </button>
+                        <p className="text-xs text-muted-foreground font-body">You matched!</p>
                       </div>
+                      <Button
+                        type="button"
+                        onClick={() => openChatWithProfile(profile)}
+                        className="border-2 border-black rounded-none font-bold px-3 py-1 text-xs bg-primary text-primary-foreground"
+                      >
+                        Message
+                      </Button>
                     </div>
                   </motion.div>
                 ))
@@ -1615,32 +1837,51 @@ export default function Home() {
 
       {/* Chat Popup */}
       <AnimatePresence>
-        {showChat && chatProfile && (
+        {showChat && (
           <motion.div
             initial={{ opacity: 0, y: 100 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 100 }}
             transition={{ type: "spring", stiffness: 300, damping: 30 }}
-            className="fixed bottom-0 left-0 right-0 z-50 bg-background border-t-2 border-black rounded-t-2xl shadow-[0_-8px_0px_0px_rgba(0,0,0,1)] max-h-[80vh] flex flex-col"
+            className="fixed bottom-0 left-0 right-0 z-50 bg-background border-t-2 border-black rounded-t-2xl shadow-[0_-8px_0px_0px_rgba(0,0,0,1)] h-[90vh] max-h-[90vh] flex flex-col"
           >
             {/* Chat Header */}
-            <div className="flex items-center justify-between p-4 border-b-2 border-black bg-background sticky top-0">
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => {
-                    setSelectedProfile(chatProfile);
-                    setIsFullScreen(true);
-                    setShowChat(false);
-                  }}
-                  className="w-12 h-12 rounded-full border-2 border-black overflow-hidden hover:scale-110 transition-transform"
-                >
-                  <img src={chatProfile.image} alt="Chat" className="w-full h-full object-cover" />
-                </button>
-                <div>
-                  <h3 className="font-display text-lg text-foreground">Chat</h3>
-                  <p className="text-xs text-muted-foreground">Online</p>
+            <div
+              className="flex items-center justify-between p-4 border-b-2 border-black bg-background sticky top-0"
+              onTouchStart={handleChatSwipeStart}
+              onTouchMove={handleChatSwipeMove}
+              onTouchEnd={handleChatSwipeEnd}
+              onTouchCancel={handleChatSwipeEnd}
+            >
+              {chatView === "thread" && chatProfile ? (
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setChatView("list")}
+                    className="border-2 border-black hover:bg-accent"
+                  >
+                    <ArrowLeft className="h-5 w-5" />
+                  </Button>
+                  <button
+                    onClick={openProfileFromChat}
+                    className="w-12 h-12 rounded-full border-2 border-black overflow-hidden hover:scale-110 transition-transform"
+                  >
+                    <img src={chatProfile.image} alt={chatProfile.name} className="w-full h-full object-cover" />
+                  </button>
+                  <div>
+                    <button type="button" onClick={openProfileFromChat} className="text-left">
+                      <h3 className="font-display text-lg text-foreground">{chatProfile.name}</h3>
+                    </button>
+                    <p className="text-xs text-muted-foreground">Online</p>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div>
+                  <h3 className="font-display text-lg text-foreground">Chats</h3>
+                  <p className="text-xs text-muted-foreground">Your matches</p>
+                </div>
+              )}
               <Button
                 variant="ghost"
                 size="icon"
@@ -1651,43 +1892,100 @@ export default function Home() {
               </Button>
             </div>
 
-            {/* Chat Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {chatMessages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}
-                >
-                  <div
-                    className={`max-w-xs px-4 py-2 rounded-lg border-2 border-black ${
-                      msg.sender === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-muted-foreground"
-                    }`}
-                  >
-                    <p className="text-sm font-body">{msg.text}</p>
+            {chatView === "thread" && chatProfile ? (
+              <>
+                {/* Chat Messages */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  {chatMessages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}
+                    >
+                      <div
+                        className={`max-w-xs px-4 py-2 rounded-lg border-2 border-black ${
+                          msg.sender === "user"
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        <p className="text-sm font-body">{msg.text}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Quick Replies */}
+                <div className="border-t-2 border-black p-4 bg-background sticky bottom-0 space-y-4">
+                  {QUICK_REPLY_GROUPS.map((group) => (
+                    <div
+                      key={group.label}
+                      className="space-y-3 border-2 border-black bg-muted/20 p-3 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
+                    >
+                      <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-muted-foreground font-body">
+                        {group.label}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {group.options.map((option) => (
+                          <Button
+                            key={option}
+                            type="button"
+                            onClick={() => handleSendMessage(`${group.label}: ${option}`)}
+                            className="border-2 border-black rounded-none font-bold text-xs bg-background text-foreground px-3 py-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:-translate-y-0.5 hover:bg-accent hover:shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] transition-transform"
+                          >
+                            {option}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  <div className="flex flex-wrap gap-2">
+                    {QUICK_REPLY_ACTIONS.map((option) => {
+                      const isConfirm = option === "Okay";
+                      return (
+                        <Button
+                          key={option}
+                          type="button"
+                          onClick={() => handleSendMessage(option)}
+                          className={`border-2 border-black rounded-none font-bold text-xs px-4 py-2 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-transform ${
+                            isConfirm
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-background text-foreground hover:bg-accent"
+                          }`}
+                        >
+                          {option}
+                        </Button>
+                      );
+                    })}
                   </div>
                 </div>
-              ))}
-            </div>
-
-            {/* Chat Input */}
-            <div className="border-t-2 border-black p-4 bg-background sticky bottom-0 flex gap-2">
-              <Input
-                type="text"
-                placeholder="Type a message..."
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
-                className="flex-1 border-2 border-black rounded-none font-body"
-              />
-              <Button
-                onClick={handleSendMessage}
-                className="bg-primary text-primary-foreground border-2 border-black rounded-none font-bold"
-              >
-                <Send className="h-5 w-5" />
-              </Button>
-            </div>
+              </>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {matchedProfiles.length === 0 ? (
+                  <p className="text-sm text-muted-foreground font-body">No matches yet.</p>
+                ) : (
+                  matchedProfiles.map((profile) => (
+                    <button
+                      key={profile.id}
+                      type="button"
+                      onClick={() => openChatWithProfile(profile)}
+                      className="w-full flex items-center gap-3 border-2 border-black rounded-none bg-muted/30 px-3 py-2 hover:bg-muted/50 transition-colors"
+                    >
+                      <Avatar className="w-12 h-12 border-2 border-black">
+                        <AvatarImage src={profile.image} alt={profile.name} className="object-cover" />
+                        <AvatarFallback className="bg-secondary text-secondary-foreground text-xs">
+                          {profile.name.substring(0, 2).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1 min-w-0 text-left">
+                        <p className="font-display text-sm text-foreground truncate">{profile.name}</p>
+                        <p className="text-xs text-muted-foreground font-body">Tap to chat</p>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
