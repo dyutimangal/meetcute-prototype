@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { apiUrl } from "@/lib/api";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { ArrowRight } from "lucide-react";
@@ -23,7 +24,9 @@ export default function Login() {
     try {
       const normalizedUsername = username.trim().toLowerCase();
       const normalizedEmail = email.trim().toLowerCase();
-      const response = await fetch(`/api/users/${encodeURIComponent(normalizedUsername)}`);
+      const response = await fetch(
+        apiUrl(`/api/users/${encodeURIComponent(normalizedUsername)}`)
+      );
       if (!response.ok) {
         const contentType = response.headers.get("content-type") || "";
         const payload = contentType.includes("application/json")

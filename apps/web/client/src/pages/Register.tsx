@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { apiUrl } from "@/lib/api";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { ArrowLeft } from "lucide-react";
@@ -35,7 +36,7 @@ export default function Register() {
     try {
       const normalizedUsername = usernameValue.toLowerCase();
       const normalizedEmail = emailValue.toLowerCase();
-      const response = await fetch("/api/users", {
+      const response = await fetch(apiUrl("/api/users"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

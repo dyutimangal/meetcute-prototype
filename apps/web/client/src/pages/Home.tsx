@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { profiles as seedProfiles } from "@/lib/data";
+import { apiUrl } from "@/lib/api";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bell, Filter, Heart, ImagePlus, Maximize2, MessageCircle, Send, X } from "lucide-react";
 import { useState, useEffect, useId } from "react";
@@ -302,8 +303,8 @@ export default function Home() {
           params.set("intention", "dating");
         }
         const [meResponse, usersResponse] = await Promise.all([
-          fetch(`/api/users/${encodeURIComponent(stored.username)}`),
-          fetch(`/api/users?${params.toString()}`),
+          fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}`)),
+          fetch(apiUrl(`/api/users?${params.toString()}`)),
         ]);
 
         if (meResponse.ok) {
@@ -465,7 +466,7 @@ export default function Home() {
         interestedIn: normalizedInterestedIn,
         intention: normalizedIntention,
       };
-      const response = await fetch(`/api/users/${encodeURIComponent(stored.username)}`, {
+      const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -569,7 +570,7 @@ export default function Home() {
     );
 
     try {
-      const response = await fetch(`/api/users/${encodeURIComponent(profileId)}/like`, {
+      const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(profileId)}/like`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ likerUsername: stored.username, action: wasLiked ? "unlike" : "like" }),
@@ -663,7 +664,7 @@ export default function Home() {
     }
     setSetupError(null);
     try {
-      const response = await fetch(`/api/users/${encodeURIComponent(stored.username)}/avatar`, {
+      const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}/avatar`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ avatar: dataUrl }),
@@ -696,7 +697,7 @@ export default function Home() {
     setIsSavingProfile(true);
     setProfileSaveError(null);
     try {
-    const response = await fetch(`/api/users/${encodeURIComponent(stored.username)}`, {
+    const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}`), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -741,7 +742,7 @@ export default function Home() {
         kind === "secondary" ? "avatar-secondary" : "avatar";
       const body =
         kind === "secondary" ? { avatarSecondary: dataUrl } : { avatar: dataUrl };
-      const response = await fetch(`/api/users/${encodeURIComponent(stored.username)}/${endpoint}`, {
+      const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}/${endpoint}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

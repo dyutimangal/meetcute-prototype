@@ -57,9 +57,20 @@ Basic API
 
 Frontend (apps/web)
 
-- Vite dev server runs on http://localhost:5173 by default.
-- API requests are proxied from the web app to http://localhost:3000.
+- Vite dev server runs on http://localhost:3000 by default.
+- API requests are proxied from the web app to http://localhost:3001.
 - Build output lands in `apps/web/dist/public` for static hosting.
+- Production options:
+  - Serve the built frontend from the API by setting `SERVE_WEB=1` (expects `apps/web/dist/public` or `FRONTEND_DIST`).
+  - Or host the frontend separately and set `FRONTEND_URL` on the API to redirect non-API routes.
+
+Render (free + simple)
+
+- Use the provided `render.yaml` to create two services:
+  - `meetcute-web` (Static Site) builds with `pnpm build:web` and serves `apps/web/dist/public`.
+  - `meetcute-api` (Web Service) runs `pnpm -C apps/api start`.
+- Set `VITE_API_BASE_URL` on the static site to your API URL (e.g. `https://meetcute-api.onrender.com`).
+- Set `FRONTEND_URL` and `CORS_ORIGIN` on the API to your static site URL (e.g. `https://meetcute-web.onrender.com`).
 
 Username rules & notes
 

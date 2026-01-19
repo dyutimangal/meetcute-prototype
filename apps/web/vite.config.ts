@@ -24,7 +24,7 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    port: 5173,
+    port: 3000,
     strictPort: false, // Will find next available port if 5173 is busy
     host: true,
     allowedHosts: [
@@ -36,10 +36,10 @@ export default defineConfig({
       "localhost",
       "127.0.0.1",
     ],
-    // Proxy API calls in dev to the backend (root server on port 3000)
+    // Proxy API calls in dev to the backend (root server on port 3001)
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:3001',
         changeOrigin: true,
         secure: false,
       },
