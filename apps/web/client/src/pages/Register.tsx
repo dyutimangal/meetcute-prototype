@@ -1,9 +1,12 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { apiUrl } from "@/lib/api";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { ArrowLeft } from "lucide-react";
 
+const USERNAME_REGEX = /^[a-zA-Z0-9_-]{2,32}$/;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export default function Register() {
   const [, setLocation] = useLocation();
   const [username, setUsername] = useState("");
@@ -13,17 +16,26 @@ export default function Register() {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || !email.trim()) {
-      alert("Please fill in all fields");
+    setError(null);
+    const usernameValue = username.trim();
+    const emailValue = email.trim();
+    if (!usernameValue || !emailValue) {
+      setError("Please fill in all fields.");
       return;
     }
-
+    if (!USERNAME_REGEX.test(usernameValue)) {
+      setError("Username must be 2-32 characters and use letters, numbers, - or _.");
+      return;
+    }
+    if (!EMAIL_REGEX.test(emailValue)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
     setIsLoading(true);
-    setError(null);
     try {
-      const normalizedUsername = username.trim().toLowerCase();
-      const normalizedEmail = email.trim().toLowerCase();
-      const response = await fetch("/api/auth/register", {
+      const normalizedUsername = usernameValue.toLowerCase();
+      const normalizedEmail = emailValue.toLowerCase();
+      const response = await fetch(apiUrl("/api/auth/register"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",

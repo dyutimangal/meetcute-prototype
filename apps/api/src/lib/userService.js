@@ -9,17 +9,18 @@ const isProfileComplete = (user) => {
   const hasAge = typeof user.age === 'number' && !Number.isNaN(user.age);
   const hasGender = Boolean(user.gender);
   const hasAvatar = typeof user.avatar === 'string' && user.avatar.trim().length > 0;
+  const isAutoAvatar = hasAvatar && user.avatar.startsWith('data:image/svg+xml');
   const hasIntention = Array.isArray(user.intention) && user.intention.length > 0;
   const hasInterestedIn = Array.isArray(user.interestedIn) && user.interestedIn.length > 0;
   const range = user.preferredAgeRange || {};
   const hasRange = typeof range.min === 'number' && typeof range.max === 'number';
-  return hasAge && hasGender && hasAvatar && hasIntention && hasInterestedIn && hasRange;
+  return hasAge && hasGender && hasAvatar && !isAutoAvatar && hasIntention && hasInterestedIn && hasRange;
 };
 
 const getCompleteProfileQuery = () => ([
   { age: { $type: 'number' } },
   { gender: { $exists: true, $ne: null } },
-  { avatar: { $exists: true, $type: 'string', $ne: '' } },
+  { avatar: { $exists: true, $type: 'string', $ne: '', $not: /^data:image\/svg\+xml/i } },
   { 'intention.0': { $exists: true } },
   { 'interestedIn.0': { $exists: true } },
   { 'preferredAgeRange.min': { $type: 'number' } },

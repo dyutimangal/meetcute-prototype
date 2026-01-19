@@ -141,6 +141,7 @@ test('incomplete profiles are hidden from other users', async () => {
       gender: 'female',
       intention: ['dating'],
       interestedIn: ['guys'],
+      avatar: 'data:image/jpeg;base64,complete',
       preferredAgeRange: { min: 24, max: 36 },
     });
 
@@ -178,6 +179,7 @@ test('liking requires the liker to complete their profile', async () => {
       gender: 'male',
       intention: ['dating'],
       interestedIn: ['girls'],
+      avatar: 'data:image/jpeg;base64,target',
       preferredAgeRange: { min: 25, max: 35 },
     });
 

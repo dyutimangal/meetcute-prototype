@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { profiles as seedProfiles } from "@/lib/data";
+import { apiUrl } from "@/lib/api";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bell, Filter, Heart, ImagePlus, LogOut, Maximize2, MessageCircle, Send, X } from "lucide-react";
 import { useState, useEffect, useId } from "react";
@@ -29,6 +30,8 @@ type ApiUser = {
 const PROMPT_PLACEHOLDER = "I am too lazy for this shit";
 const TARGET_IMAGE_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 2048;
+const AGE_MIN = 18;
+const AGE_MAX = 99;
 
 const DEFAULT_PROMPTS = {
   lookingFor: "",
@@ -115,6 +118,9 @@ const compressImageToDataUrl = async (file: File) => {
 };
 
 const INTEREST_OPTIONS = ["girls", "guys", "non-binary"];
+const ALLOWED_INTENTIONS = new Set(["dating", "friendship"]);
+const ALLOWED_IDENTIFICATIONS = new Set(["male", "female", "non-binary"]);
+const ALLOWED_INTERESTED_IN = new Set(INTEREST_OPTIONS);
 
 interface Profile {
   id: string;
@@ -152,17 +158,37 @@ const isProfileComplete = (user?: ApiUser) => {
   const hasAge = typeof user.age === "number" && !Number.isNaN(user.age);
   const hasGender = Boolean(user.gender);
   const hasAvatar = typeof user.avatar === "string" && user.avatar.trim().length > 0;
+  const isAutoAvatar = hasAvatar && user.avatar?.startsWith("data:image/svg+xml");
   const hasIntention = Array.isArray((user as any).intention) && (user as any).intention.length > 0;
   const hasInterestedIn = Array.isArray(user.interestedIn) && user.interestedIn.length > 0;
   const range = (user as any).preferredAgeRange || {};
   const hasRange = typeof range.min === "number" && typeof range.max === "number";
-  return hasAge && hasGender && hasAvatar && hasIntention && hasInterestedIn && hasRange;
+  return hasAge && hasGender && hasAvatar && !isAutoAvatar && hasIntention && hasInterestedIn && hasRange;
 };
 
 const formatLabelValue = (value?: string | number) => {
   if (value === null || typeof value === "undefined" || value === "") return "—";
   return String(value);
 };
+
+const normalizeIntentionValue = (value: string) => {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "friends" || normalized === "friend") return "friendship";
+  return normalized;
+};
+
+const parseAgeInput = (value: string, label: string) => {
+  const trimmed = String(value ?? "").trim();
+  if (trimmed === "") return { error: `${label} is required.` };
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed)) return { error: `${label} must be a whole number.` };
+  if (parsed < AGE_MIN || parsed > AGE_MAX) {
+    return { error: `${label} must be between ${AGE_MIN} and ${AGE_MAX}.` };
+  }
+  return { value: parsed };
+};
+
+const dedupeList = (values: string[]) => Array.from(new Set(values));
 
 const normalizeInterestedInValue = (value: string) => {
   const normalized = value.toLowerCase();
@@ -323,6 +349,7 @@ export default function Home() {
   const [editPreferredAgeMax, setEditPreferredAgeMax] = useState("");
   const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
   const imageInputId = useId();
   const secondaryImageInputId = useId();
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
@@ -342,10 +369,9 @@ export default function Home() {
   });
   const [setupAvatarDataUrl, setSetupAvatarDataUrl] = useState("");
   const [setupAvatarName, setSetupAvatarName] = useState("");
-  const [setupError, setSetupError] = useState<string | null>(null);
   const [filters, setFilters] = useState<FilterState>({
-    ageMin: 18,
-    ageMax: 65,
+    ageMin: AGE_MIN,
+    ageMax: Math.min(65, AGE_MAX),
     intention: "all",
     interestedInYou: false,
     matchedWith: false,
@@ -358,7 +384,7 @@ export default function Home() {
       return active;
     }
     try {
-      const response = await fetch("/api/auth/me", { credentials: "include" });
+      const response = await fetch(apiUrl("/api/auth/me"), { credentials: "include" });
       if (!response.ok) return null;
       const user = await response.json().catch(() => null);
       if (user?.username) {
@@ -400,8 +426,8 @@ export default function Home() {
           params.set("intention", "dating");
         }
         const [meResponse, usersResponse] = await Promise.all([
-          fetch(`/api/users/${encodeURIComponent(stored.username)}`, { credentials: "include" }),
-          fetch(`/api/users?${params.toString()}`, { credentials: "include" }),
+          fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}`), { credentials: "include" }),
+          fetch(apiUrl(`/api/users?${params.toString()}`), { credentials: "include" }),
         ]);
 
         if (meResponse.ok) {
@@ -516,65 +542,124 @@ export default function Home() {
   }, [selectedProfile, currentUserProfile]);
 
   const handleSetupComplete = async () => {
-    if (!setupData.age || setupData.intention.length === 0 || !setupData.identification || setupData.interestedIn.length === 0 || !setupData.preferredAgeMin || !setupData.preferredAgeMax) {
-      alert("Please fill in all fields");
+    setSetupError(null);
+    const ageResult = parseAgeInput(setupData.age, "Age");
+    if (ageResult.error) {
+      setSetupError(ageResult.error);
+      return;
+    }
+    if (setupData.intention.length === 0) {
+      setSetupError("Please select what you're looking for.");
+      return;
+    }
+    const normalizedIntention = dedupeList(
+      setupData.intention.map((value) => normalizeIntentionValue(value))
+    );
+    if (normalizedIntention.some((value) => !ALLOWED_INTENTIONS.has(value))) {
+      setSetupError("Please select a valid intention.");
+      return;
+    }
+    const normalizedGender = String(setupData.identification || "").trim().toLowerCase();
+    if (!ALLOWED_IDENTIFICATIONS.has(normalizedGender)) {
+      setSetupError("Please select how you identify.");
+      return;
+    }
+    if (setupData.interestedIn.length === 0) {
+      setSetupError("Please select who you're into.");
+      return;
+    }
+    const normalizedInterestedIn = dedupeList(
+      setupData.interestedIn.map((value) => normalizeInterestedInValue(value))
+    );
+    if (normalizedInterestedIn.some((value) => !ALLOWED_INTERESTED_IN.has(value))) {
+      setSetupError("Please select a valid interest.");
+      return;
+    }
+    const minResult = parseAgeInput(setupData.preferredAgeMin, "Preferred min age");
+    if (minResult.error) {
+      setSetupError(minResult.error);
+      return;
+    }
+    const maxResult = parseAgeInput(setupData.preferredAgeMax, "Preferred max age");
+    if (maxResult.error) {
+      setSetupError(maxResult.error);
+      return;
+    }
+    if (minResult.value > maxResult.value) {
+      setSetupError("Preferred max age must be greater than or equal to min age.");
       return;
     }
     if (!setupAvatarDataUrl) {
       setSetupError("Please upload a profile photo to continue.");
       return;
     }
-    // Save setup data with user-specific key
-    const storedUser = localStorage.getItem("meetCuteUser");
-    const setupKey = `meetCuteUserSetup_${storedUser}`;
-    localStorage.setItem(setupKey, JSON.stringify(setupData));
-    // Also save a flag that setup is complete
-    localStorage.setItem("meetCuteUserSetup", "true");
-
     const stored = getActiveUser(authUser);
-    if (stored?.username) {
-      try {
-        const updatedFields = {
-          age: Number(setupData.age),
-          gender: setupData.identification,
-          interestedIn: setupData.interestedIn,
-        };
-        const response = await fetch(`/api/users/${encodeURIComponent(stored.username)}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            age: updatedFields.age,
-            gender: updatedFields.gender,
-            intention: setupData.intention,
-            interestedIn: updatedFields.interestedIn,
-            avatar: setupAvatarDataUrl,
-            preferredAgeRange: {
-              min: Number(setupData.preferredAgeMin),
-              max: Number(setupData.preferredAgeMax),
-            },
-          }),
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          setSetupError(payload?.error || "Unable to save profile. Please try again.");
-          return;
-        }
-        const nextImage = payload.avatar || setupAvatarDataUrl;
-        setCurrentUserProfile((prev) =>
-          prev ? { ...prev, ...updatedFields, image: nextImage } : prev
-        );
-        setSelectedProfile((prev) =>
-          prev && prev.id === stored.username ? { ...prev, ...updatedFields, image: nextImage } : prev
-        );
-        setShowSetupModal(false);
-        setSetupError(null);
-      } catch (err) {
-        console.error(err);
-        setSetupError("Unable to save profile. Please try again.");
-      }
+    if (!stored?.username) {
+      setSetupError("Unable to find your account. Please log in again.");
       return;
     }
+    try {
+      const updatedFields = {
+        age: ageResult.value,
+        gender: normalizedGender,
+        interestedIn: normalizedInterestedIn,
+        intention: normalizedIntention,
+      };
+      const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          age: updatedFields.age,
+          gender: updatedFields.gender,
+          intention: updatedFields.intention,
+          interestedIn: updatedFields.interestedIn,
+          avatar: setupAvatarDataUrl,
+          preferredAgeRange: {
+            min: minResult.value,
+            max: maxResult.value,
+          },
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setSetupError(payload?.error || "Unable to save profile. Please try again.");
+        return;
+      }
+      // Save setup data with user-specific key
+      const storedUser = localStorage.getItem("meetCuteUser");
+      const setupKey = `meetCuteUserSetup_${storedUser}`;
+      localStorage.setItem(setupKey, JSON.stringify(setupData));
+      // Also save a flag that setup is complete
+      localStorage.setItem("meetCuteUserSetup", "true");
+      const nextImage = payload.avatar || setupAvatarDataUrl;
+      setCurrentUserProfile((prev) =>
+        prev
+          ? {
+              ...prev,
+              ...updatedFields,
+              image: nextImage,
+              preferredAgeRange: { min: minResult.value, max: maxResult.value },
+            }
+          : prev
+      );
+      setSelectedProfile((prev) =>
+        prev && prev.id === stored.username
+          ? {
+              ...prev,
+              ...updatedFields,
+              image: nextImage,
+              preferredAgeRange: { min: minResult.value, max: maxResult.value },
+            }
+          : prev
+      );
+      setShowSetupModal(false);
+      setSetupError(null);
+    } catch (err) {
+      console.error(err);
+      setSetupError("Unable to save profile. Please try again.");
+    }
+    return;
     setShowSetupModal(false);
     setSetupError(null);
   };
@@ -665,7 +750,7 @@ export default function Home() {
     );
 
     try {
-      const response = await fetch(`/api/users/${encodeURIComponent(profileId)}/like`, {
+      const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(profileId)}/like`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -732,7 +817,7 @@ export default function Home() {
         prompts: editPrompts,
         ...(hasRange ? { preferredAgeRange: { min: minRange, max: maxRange } } : {}),
       };
-      const response = await fetch(`/api/users/${encodeURIComponent(stored.username)}`, {
+      const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -774,7 +859,7 @@ export default function Home() {
         kind === "secondary" ? "avatar-secondary" : "avatar";
       const body =
         kind === "secondary" ? { avatarSecondary: dataUrl } : { avatar: dataUrl };
-      const response = await fetch(`/api/users/${encodeURIComponent(stored.username)}/${endpoint}`, {
+      const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}/${endpoint}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -813,7 +898,7 @@ export default function Home() {
 
   const handleLogout = async () => {
     try {
-      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+      await fetch(apiUrl("/api/auth/logout"), { method: "POST", credentials: "include" });
     } catch (err) {
       console.error(err);
     } finally {
@@ -901,8 +986,8 @@ export default function Home() {
                     <h3 className="font-display text-lg text-foreground">Age Range</h3>
                     <div className="space-y-3">
                       <Slider
-                        min={18}
-                        max={65}
+                        min={AGE_MIN}
+                        max={AGE_MAX}
                         step={1}
                         value={[filters.ageMin, filters.ageMax]}
                         onValueChange={(value) =>
@@ -1094,8 +1179,9 @@ export default function Home() {
                 <label className="block text-sm font-bold text-foreground font-body">Your Age</label>
                 <Input
                   type="number"
-                  min="18"
-                  max="100"
+                  min={AGE_MIN}
+                  max={AGE_MAX}
+                  step="1"
                   placeholder="Enter your age"
                   value={setupData.age}
                   onChange={(e) => setSetupData({ ...setupData, age: e.target.value })}
@@ -1165,22 +1251,24 @@ export default function Home() {
                 <div className="flex gap-3 items-end">
                   <div className="flex-1">
                     <label className="text-xs text-muted-foreground font-body">Min</label>
-                      <Input
-                        type="number"
-                        min="18"
-                        max="100"
-                        placeholder="Min"
-                        value={setupData.preferredAgeMin}
-                        onChange={(e) => setSetupData({ ...setupData, preferredAgeMin: e.target.value })}
-                        className="w-full border-2 border-black rounded-none font-body"
-                      />
+                    <Input
+                      type="number"
+                      min={AGE_MIN}
+                      max={AGE_MAX}
+                      step="1"
+                      placeholder="Min"
+                      value={setupData.preferredAgeMin}
+                      onChange={(e) => setSetupData({ ...setupData, preferredAgeMin: e.target.value })}
+                      className="w-full border-2 border-black rounded-none font-body"
+                    />
                   </div>
                   <div className="flex-1">
                     <label className="text-xs text-muted-foreground font-body">Max</label>
                     <Input
                       type="number"
-                      min="18"
-                      max="100"
+                      min={AGE_MIN}
+                      max={AGE_MAX}
+                      step="1"
                       placeholder="Max"
                       value={setupData.preferredAgeMax}
                       onChange={(e) => setSetupData({ ...setupData, preferredAgeMax: e.target.value })}

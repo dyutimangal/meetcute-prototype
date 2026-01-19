@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: meetcute-api
+    env: node
+    plan: free
+    buildCommand: pnpm install
+    startCommand: pnpm -C apps/api start
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: FRONTEND_URL
+        value: https://your-frontend.onrender.com
+      - key: CORS_ORIGIN
+        value: https://your-frontend.onrender.com
+
+staticSites:
+  - name: meetcute-web
+    buildCommand: pnpm install && pnpm build:web
+    publishPath: apps/web/dist/public
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://your-api.onrender.com

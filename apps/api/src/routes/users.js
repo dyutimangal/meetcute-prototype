@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
-const { DEFAULT_PROMPTS } = require('../lib/defaultPrompts');
 const {
   createUser,
   isProfileComplete,
@@ -10,11 +9,119 @@ const {
 } = require('../lib/userService');
 const { requireAuth } = require('../lib/session');
 
+const PROMPT_PLACEHOLDER = 'I am too lazy for this shit';
+
+const LEGACY_PROMPTS = {
+  lookingFor: 'Someone who loves spontaneous adventures and good conversations over coffee.',
+  idealWeekend: 'Hiking in the morning, farmers market for lunch, and a movie night at home.',
+  superpower: 'I can make anyone laugh and I am great at giving genuine advice to friends.',
+  petPeeve: 'People who do not listen actively or are always on their phones during conversations.'
+};
+
+const LEGACY_PROMPT_SET = new Set(
+  Object.values(LEGACY_PROMPTS)
+    .map((value) => value.trim().replace(/\s+/g, ' ').toLowerCase())
+);
+
+const DEFAULT_PROMPTS = {
+  lookingFor: PROMPT_PLACEHOLDER,
+  idealWeekend: PROMPT_PLACEHOLDER,
+  superpower: PROMPT_PLACEHOLDER,
+  petPeeve: PROMPT_PLACEHOLDER
+};
+
+const AGE_MIN = 18;
+const AGE_MAX = 99;
+const ALLOWED_INTENTIONS = new Set(['dating', 'friendship']);
+const ALLOWED_INTERESTED_IN = new Set(['girls', 'guys', 'non-binary']);
+const ALLOWED_GENDERS = new Set(['male', 'female', 'non-binary']);
+
+const toUniqueList = (values) => Array.from(new Set(values));
+
+const parseOptionalIntegerInRange = (value, { field, min, max }) => {
+  if (value === undefined || value === null || value === '') return { value: undefined };
+  const num = Number(value);
+  if (!Number.isInteger(num)) return { error: `${field} must be an integer` };
+  if (num < min || num > max) return { error: `${field} must be between ${min} and ${max}` };
+  return { value: num };
+};
+
+const parseNullableIntegerInRange = (value, options) => {
+  if (value === undefined) return { value: undefined };
+  if (value === null || value === '') return { value: null };
+  return parseOptionalIntegerInRange(value, options);
+};
+
+const parseNormalizedList = (input, { normalizer, allowed, field }) => {
+  const rawValues = Array.isArray(input)
+    ? input
+    : String(input || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+  const normalized = rawValues.map(normalizer);
+  const invalid = normalized.filter(value => !allowed.has(value));
+  if (invalid.length > 0) return { error: `invalid ${field}` };
+  return { value: toUniqueList(normalized) };
+};
+
+const normalizeIntentionValue = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'friends' || normalized === 'friend') return 'friendship';
+  return normalized;
+};
+
+const normalizeIntentionList = (values) => {
+  if (!Array.isArray(values)) return [];
+  return toUniqueList(
+    values
+      .map(normalizeIntentionValue)
+      .filter(value => ALLOWED_INTENTIONS.has(value))
+  );
+};
+
+const normalizePromptValue = (value) => {
+  const trimmed = String(value || '').trim();
+  if (trimmed === '') return PROMPT_PLACEHOLDER;
+  const normalized = trimmed.replace(/\s+/g, ' ').toLowerCase();
+  if (LEGACY_PROMPT_SET.has(normalized)) return PROMPT_PLACEHOLDER;
+  return trimmed;
+};
+
+const normalizePrompts = (prompts) => {
+  const next = { ...DEFAULT_PROMPTS };
+  Object.keys(DEFAULT_PROMPTS).forEach((key) => {
+    if (prompts && Object.prototype.hasOwnProperty.call(prompts, key)) {
+      next[key] = normalizePromptValue(prompts[key]);
+    }
+  });
+  return next;
+};
+
 const withDefaultPrompts = (user) => {
   if (!user) return user;
-  user.prompts = Object.assign({}, DEFAULT_PROMPTS, user.prompts || {});
+  user.prompts = normalizePrompts(user.prompts);
   return user;
 };
+
+const normalizeInterestedInValue = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'male') return 'guys';
+  if (normalized === 'female') return 'girls';
+  if (normalized === 'nonbinary') return 'non-binary';
+  return normalized;
+};
+
+const normalizeInterestedInList = (values) => {
+  if (!Array.isArray(values)) return [];
+  return toUniqueList(
+    values
+      .map(normalizeInterestedInValue)
+      .filter(value => ALLOWED_INTERESTED_IN.has(value))
+  );
+};
+
+const hasOwnField = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 
 router.use((req, res, next) => {
   if (req.method === 'POST' && req.path === '/') return next();
@@ -35,22 +142,40 @@ router.get('/', async (req, res) => {
     const authUsername = req.authUser ? String(req.authUser.username).trim().toLowerCase() : null;
     if (authUsername) query.username = { $ne: authUsername };
 
+    const minAgeParsed = parseOptionalIntegerInRange(minAge, { field: 'minAge', min: AGE_MIN, max: AGE_MAX });
+    if (minAgeParsed.error) return res.status(400).json({ error: minAgeParsed.error });
+    const maxAgeParsed = parseOptionalIntegerInRange(maxAge, { field: 'maxAge', min: AGE_MIN, max: AGE_MAX });
+    if (maxAgeParsed.error) return res.status(400).json({ error: maxAgeParsed.error });
+    if (typeof minAgeParsed.value === 'number' && typeof maxAgeParsed.value === 'number' && minAgeParsed.value > maxAgeParsed.value) {
+      return res.status(400).json({ error: 'maxAge must be greater than or equal to minAge' });
+    }
+
     // age filtering — only for users with complete profiles
-    if (minAge || maxAge) {
+    if (minAgeParsed.value !== undefined || maxAgeParsed.value !== undefined) {
       const ageRange = {};
-      if (minAge) ageRange.$gte = Number(minAge);
-      if (maxAge) ageRange.$lte = Number(maxAge);
-      andConditions.push({ age: ageRange });
+      if (typeof minAgeParsed.value === 'number') ageRange.$gte = minAgeParsed.value;
+      if (typeof maxAgeParsed.value === 'number') ageRange.$lte = maxAgeParsed.value;
+      if (Object.keys(ageRange).length > 0) andConditions.push({ age: ageRange });
     }
 
     if (intention) {
-      const arr = String(intention).split(',').map(s => s.trim()).filter(Boolean);
-      if (arr.length > 0) query.intention = { $in: arr };
+      const parsed = parseNormalizedList(intention, {
+        normalizer: normalizeIntentionValue,
+        allowed: ALLOWED_INTENTIONS,
+        field: 'intention filter'
+      });
+      if (parsed.error) return res.status(400).json({ error: parsed.error });
+      if (parsed.value.length > 0) query.intention = { $in: parsed.value };
     }
 
     if (interestedIn) {
-      const arr = String(interestedIn).split(',').map(s => s.trim()).filter(Boolean);
-      if (arr.length > 0) query.interestedIn = { $in: arr };
+      const parsed = parseNormalizedList(interestedIn, {
+        normalizer: normalizeInterestedInValue,
+        allowed: ALLOWED_INTERESTED_IN,
+        field: 'interestedIn filter'
+      });
+      if (parsed.error) return res.status(400).json({ error: parsed.error });
+      if (parsed.value.length > 0) query.interestedIn = { $in: parsed.value };
     }
 
     if (andConditions.length > 0) query.$and = andConditions;
@@ -62,15 +187,31 @@ router.get('/', async (req, res) => {
       ? await User.findOne({ username: authUsername }).lean()
       : null;
     const enriched = users.map(u => {
-      const needsPrompts = !u.prompts || Object.keys(u.prompts).length === 0;
+      const originalPrompts = u.prompts ? { ...u.prompts } : {};
+      const normalizedIntention = normalizeIntentionList(u.intention || []);
+      const normalizedInterestedIn = normalizeInterestedInList(u.interestedIn || []);
+      const needsIntentionUpdate = JSON.stringify(normalizedIntention) !== JSON.stringify(u.intention || []);
+      const needsInterestedInUpdate = JSON.stringify(normalizedInterestedIn) !== JSON.stringify(u.interestedIn || []);
       if (!u.avatar && u.username) {
         const initial = (u.username && u.username[0]) ? u.username[0].toUpperCase() : '?';
         const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><rect width='100%' height='100%' rx='20' fill='%2318273a'/><text x='50%' y='50%' dy='0.35em' text-anchor='middle' fill='%23ffd1b8' font-family='Arial,Helvetica,sans-serif' font-size='54'>${initial}</text></svg>`;
         u.avatar = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
       }
+      if (needsIntentionUpdate) {
+        u.intention = normalizedIntention;
+      }
+      if (needsInterestedInUpdate) {
+        u.interestedIn = normalizedInterestedIn;
+      }
       withDefaultPrompts(u);
-      if (needsPrompts && u._id) {
+      if (u._id && JSON.stringify(originalPrompts) !== JSON.stringify(u.prompts)) {
         User.updateOne({ _id: u._id }, { $set: { prompts: u.prompts } }).catch(() => {});
+      }
+      if (needsIntentionUpdate && u._id) {
+        User.updateOne({ _id: u._id }, { $set: { intention: normalizedIntention } }).catch(() => {});
+      }
+      if (needsInterestedInUpdate && u._id) {
+        User.updateOne({ _id: u._id }, { $set: { interestedIn: normalizedInterestedIn } }).catch(() => {});
       }
       // compute match status: orange if liked by requesting user, pink if mutual match
       if (requestingUser) {
@@ -131,15 +272,31 @@ router.get('/:username', async (req, res) => {
     if (!canViewUserProfile(user, authUsername)) {
       return res.status(404).json({ error: 'not found' });
     }
-    const needsPrompts = !user.prompts || Object.keys(user.prompts).length === 0;
+    const originalPrompts = user.prompts ? { ...user.prompts } : {};
+    const normalizedIntention = normalizeIntentionList(user.intention || []);
+    const normalizedInterestedIn = normalizeInterestedInList(user.interestedIn || []);
+    const needsIntentionUpdate = JSON.stringify(normalizedIntention) !== JSON.stringify(user.intention || []);
+    const needsInterestedInUpdate = JSON.stringify(normalizedInterestedIn) !== JSON.stringify(user.interestedIn || []);
     if (!user.avatar && user.username) {
       const initial = (user.username && user.username[0]) ? user.username[0].toUpperCase() : '?';
       const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><rect width='100%' height='100%' rx='20' fill='%2318273a'/><text x='50%' y='50%' dy='0.35em' text-anchor='middle' fill='%23ffd1b8' font-family='Arial,Helvetica,sans-serif' font-size='54'>${initial}</text></svg>`;
       user.avatar = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
     }
+    if (needsIntentionUpdate) {
+      user.intention = normalizedIntention;
+    }
+    if (needsInterestedInUpdate) {
+      user.interestedIn = normalizedInterestedIn;
+    }
     withDefaultPrompts(user);
-    if (needsPrompts && user._id) {
+    if (user._id && JSON.stringify(originalPrompts) !== JSON.stringify(user.prompts)) {
       User.updateOne({ _id: user._id }, { $set: { prompts: user.prompts } }).catch(() => {});
+    }
+    if (needsIntentionUpdate && user._id) {
+      User.updateOne({ _id: user._id }, { $set: { intention: normalizedIntention } }).catch(() => {});
+    }
+    if (needsInterestedInUpdate && user._id) {
+      User.updateOne({ _id: user._id }, { $set: { interestedIn: normalizedInterestedIn } }).catch(() => {});
     }
     res.json(user);
   } catch (err) {
@@ -160,36 +317,68 @@ router.put('/:username', async (req, res) => {
     const payload = {};
 
     // Accept only the allowed fields and sanitize types
-    if (req.body.intention) payload.intention = Array.isArray(req.body.intention) ? req.body.intention : String(req.body.intention).split(',').map(s => s.trim()).filter(Boolean);
-    if (req.body.interestedIn) payload.interestedIn = Array.isArray(req.body.interestedIn) ? req.body.interestedIn : String(req.body.interestedIn).split(',').map(s => s.trim()).filter(Boolean);
-    if (typeof req.body.age !== 'undefined') payload.age = Number(req.body.age) || undefined;
-    if (typeof req.body.gender !== 'undefined') {
-      const g = String(req.body.gender || '').trim();
-      const allowed = ['male', 'female', 'non-binary'];
+    if (hasOwnField(req.body, 'intention')) {
+      const parsed = parseNormalizedList(req.body.intention, {
+        normalizer: normalizeIntentionValue,
+        allowed: ALLOWED_INTENTIONS,
+        field: 'intention'
+      });
+      if (parsed.error) return res.status(400).json({ error: parsed.error });
+      payload.intention = parsed.value;
+    }
+    if (hasOwnField(req.body, 'interestedIn')) {
+      const parsed = parseNormalizedList(req.body.interestedIn, {
+        normalizer: normalizeInterestedInValue,
+        allowed: ALLOWED_INTERESTED_IN,
+        field: 'interestedIn'
+      });
+      if (parsed.error) return res.status(400).json({ error: parsed.error });
+      payload.interestedIn = parsed.value;
+    }
+    if (hasOwnField(req.body, 'age')) {
+      const parsed = parseNullableIntegerInRange(req.body.age, { field: 'age', min: AGE_MIN, max: AGE_MAX });
+      if (parsed.error) return res.status(400).json({ error: parsed.error });
+      if (parsed.value === null) {
+        payload.age = null;
+      } else if (typeof parsed.value === 'number') {
+        payload.age = parsed.value;
+      }
+    }
+    if (hasOwnField(req.body, 'gender')) {
+      const g = String(req.body.gender || '').trim().toLowerCase();
       if (g === '') {
         // explicit empty -> remove gender by not including it
-      } else if (allowed.includes(g)) {
+      } else if (ALLOWED_GENDERS.has(g)) {
         payload.gender = g;
       } else {
         return res.status(400).json({ error: 'invalid gender' });
       }
     }
-    if (typeof req.body.avatar !== 'undefined') {
+    if (hasOwnField(req.body, 'avatar')) {
       const avatar = String(req.body.avatar || '').trim();
       payload.avatar = avatar === '' ? null : avatar;
     }
-    if (req.body.preferredAgeRange) {
-      const r = req.body.preferredAgeRange;
-      const min = Number(r.min);
-      const max = Number(r.max);
-      if (!Number.isNaN(min) && !Number.isNaN(max)) payload.preferredAgeRange = { min, max };
+    if (hasOwnField(req.body, 'preferredAgeRange')) {
+      const r = req.body.preferredAgeRange || {};
+      const minParsed = parseOptionalIntegerInRange(r.min, { field: 'preferredAgeRange.min', min: AGE_MIN, max: AGE_MAX });
+      if (minParsed.error) return res.status(400).json({ error: minParsed.error });
+      const maxParsed = parseOptionalIntegerInRange(r.max, { field: 'preferredAgeRange.max', min: AGE_MIN, max: AGE_MAX });
+      if (maxParsed.error) return res.status(400).json({ error: maxParsed.error });
+      if (typeof minParsed.value !== 'number' || typeof maxParsed.value !== 'number') {
+        return res.status(400).json({ error: 'preferredAgeRange requires both min and max' });
+      }
+      if (minParsed.value > maxParsed.value) {
+        return res.status(400).json({ error: 'preferredAgeRange.max must be greater than or equal to preferredAgeRange.min' });
+      }
+      payload.preferredAgeRange = { min: minParsed.value, max: maxParsed.value };
     }
     if (req.body.prompts && typeof req.body.prompts === 'object') {
       const incoming = req.body.prompts;
       const sanitized = {};
       Object.keys(DEFAULT_PROMPTS).forEach(key => {
         if (Object.prototype.hasOwnProperty.call(incoming, key)) {
-          sanitized[key] = String(incoming[key] || '').trim();
+          const value = String(incoming[key] || '').trim();
+          sanitized[key] = value === '' ? PROMPT_PLACEHOLDER : value;
         }
       });
       payload.prompts = Object.assign({}, DEFAULT_PROMPTS, sanitized);
@@ -197,7 +386,11 @@ router.put('/:username', async (req, res) => {
 
     if (Object.keys(payload).length === 0) return res.status(400).json({ error: 'no updatable fields provided' });
 
-    const updated = await User.findOneAndUpdate({ username }, { $set: payload }, { new: true });
+    const updated = await User.findOneAndUpdate(
+      { username },
+      { $set: payload },
+      { new: true, runValidators: true, context: 'query' }
+    );
     if (!updated) return res.status(404).json({ error: 'not found' });
     res.json(updated);
   } catch (err) {
@@ -212,6 +405,8 @@ router.post('/:username/like', async (req, res) => {
     const { username } = req.params;
     const normalized = String(username).trim().toLowerCase();
     const normalizedLiker = req.authUser ? String(req.authUser.username).trim().toLowerCase() : '';
+    const action = String(req.body.action || 'like').trim().toLowerCase();
+
     if (!normalizedLiker) return res.status(401).json({ error: 'unauthorized' });
 
     const [targetUser, likerUser] = await Promise.all([
@@ -222,6 +417,26 @@ router.post('/:username/like', async (req, res) => {
     if (!likerUser) return res.status(404).json({ error: 'liker not found' });
     if (!isProfileComplete(targetUser)) return res.status(404).json({ error: 'user not found' });
     if (!isProfileComplete(likerUser)) return res.status(403).json({ error: 'complete profile required' });
+
+    if (action === 'unlike') {
+      const [updatedTarget, updatedLiker] = await Promise.all([
+        User.findOneAndUpdate(
+          { username: normalized },
+          { $pull: { interestedUsers: normalizedLiker, matchedUsers: normalizedLiker } },
+          { new: true }
+        ),
+        User.findOneAndUpdate(
+          { username: normalizedLiker },
+          { $pull: { likedUsers: normalized, matchedUsers: normalized } },
+          { new: true }
+        )
+      ]);
+
+      if (!updatedTarget) return res.status(404).json({ error: 'user not found' });
+      if (!updatedLiker) return res.status(404).json({ error: 'liker not found' });
+
+      return res.json({ success: true, action: 'unlike' });
+    }
 
     // add liker to target's interestedUsers and target to liker's likedUsers
     const [updatedTarget, updatedLiker] = await Promise.all([
@@ -254,7 +469,53 @@ router.post('/:username/like', async (req, res) => {
       ]);
     }
 
-    res.json({ success: true, interestedUsers: updatedTarget.interestedUsers, likedUsers: updatedLiker.likedUsers });
+    res.json({ success: true, action: 'like', interestedUsers: updatedTarget.interestedUsers, likedUsers: updatedLiker.likedUsers });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/users/:username/avatar — update profile image
+router.post('/:username/avatar', async (req, res) => {
+  try {
+    const { username } = req.params;
+    const normalized = String(username).trim().toLowerCase();
+    const avatar = String(req.body.avatar || '').trim();
+
+    if (!avatar) return res.status(400).json({ error: 'avatar required' });
+
+    const updated = await User.findOneAndUpdate(
+      { username: normalized },
+      { $set: { avatar } },
+      { new: true }
+    );
+
+    if (!updated) return res.status(404).json({ error: 'not found' });
+    withDefaultPrompts(updated);
+    res.json({ success: true, avatar: updated.avatar });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/users/:username/avatar-secondary — update secondary profile image
+router.post('/:username/avatar-secondary', async (req, res) => {
+  try {
+    const { username } = req.params;
+    const normalized = String(username).trim().toLowerCase();
+    const avatarSecondary = String(req.body.avatarSecondary || '').trim();
+
+    if (!avatarSecondary) return res.status(400).json({ error: 'avatarSecondary required' });
+
+    const updated = await User.findOneAndUpdate(
+      { username: normalized },
+      { $set: { avatarSecondary } },
+      { new: true }
+    );
+
+    if (!updated) return res.status(404).json({ error: 'not found' });
+    withDefaultPrompts(updated);
+    res.json({ success: true, avatarSecondary: updated.avatarSecondary });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { apiUrl } from "@/lib/api";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { ArrowRight } from "lucide-react";
@@ -23,7 +24,7 @@ export default function Login() {
     try {
       const normalizedUsername = username.trim().toLowerCase();
       const normalizedEmail = email.trim().toLowerCase();
-      const response = await fetch("/api/auth/login", {
+      const response = await fetch(apiUrl("/api/auth/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
