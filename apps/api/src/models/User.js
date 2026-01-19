@@ -79,12 +79,6 @@ const userSchema = new mongoose.Schema({
 userSchema.pre('save', function (next) {
   if (this.username && typeof this.username === 'string') this.username = this.username.trim().toLowerCase();
   if (this.email && typeof this.email === 'string') this.email = this.email.trim().toLowerCase();
-  // ensure avatar exists: generate a simple SVG data-URI showing initials when missing
-  if (!this.avatar && this.username) {
-    const initial = (this.username && this.username[0]) ? this.username[0].toUpperCase() : '?';
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><rect width='100%' height='100%' rx='20' fill='%2318273a'/><text x='50%' y='50%' dy='0.35em' text-anchor='middle' fill='%23ffd1b8' font-family='Arial,Helvetica,sans-serif' font-size='54'>${initial}</text></svg>`;
-    this.avatar = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
-  }
   next();
 });
 
