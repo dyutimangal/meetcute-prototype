@@ -1,19 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
-
-const DEFAULT_PROMPTS = {
-  lookingFor: 'Someone who loves spontaneous adventures and good conversations over coffee.',
-  idealWeekend: 'Hiking in the morning, farmers market for lunch, and a movie night at home.',
-  superpower: 'I can make anyone laugh and I am great at giving genuine advice to friends.',
-  petPeeve: 'People who do not listen actively or are always on their phones during conversations.'
-};
+const { DEFAULT_PROMPTS } = require('../lib/defaultPrompts');
+const { createUser } = require('../lib/userService');
+const { requireAuth } = require('../lib/session');
 
 const withDefaultPrompts = (user) => {
   if (!user) return user;
   user.prompts = Object.assign({}, DEFAULT_PROMPTS, user.prompts || {});
   return user;
 };
+
+router.use((req, res, next) => {
+  if (req.method === 'POST' && req.path === '/') return next();
+  return requireAuth(req, res, next);
+});
 
 // GET /api/users — list with optional filtering
 // query params:
@@ -23,9 +24,10 @@ const withDefaultPrompts = (user) => {
 //  - interestedIn (comma-separated list)
 router.get('/', async (req, res) => {
   try {
-    const { exclude, minAge, maxAge, intention, interestedIn } = req.query;
+    const { minAge, maxAge, intention, interestedIn } = req.query;
     const query = {};
-    if (exclude) query.username = { $ne: String(exclude).trim().toLowerCase() };
+    const authUsername = req.authUser ? String(req.authUser.username).trim().toLowerCase() : null;
+    if (authUsername) query.username = { $ne: authUsername };
 
     // age filtering — include users without an age set (they match any range)
     if (minAge || maxAge) {
@@ -52,11 +54,9 @@ router.get('/', async (req, res) => {
     // use .lean() so we can inject generated avatar values without saving to DB here
     const users = await User.find(query).limit(200).lean();
     // Get the requesting user (from exclude param) to compute match status
-    const excludeUsername = exclude ? String(exclude).trim().toLowerCase() : null;
-    let requestingUser = null;
-    if (excludeUsername) {
-      requestingUser = await User.findOne({ username: excludeUsername }).lean();
-    }
+    const requestingUser = authUsername
+      ? await User.findOne({ username: authUsername }).lean()
+      : null;
     const enriched = users.map(u => {
       const needsPrompts = !u.prompts || Object.keys(u.prompts).length === 0;
       if (!u.avatar && u.username) {
@@ -71,7 +71,7 @@ router.get('/', async (req, res) => {
       // compute match status: orange if liked by requesting user, pink if mutual match
       if (requestingUser) {
         const iLikedThem = requestingUser.likedUsers && requestingUser.likedUsers.includes(u.username);
-        const theyLikedMe = u.likedUsers && u.likedUsers.includes(excludeUsername);
+        const theyLikedMe = u.likedUsers && u.likedUsers.includes(authUsername);
         u.likedByYou = !!iLikedThem;
         u.likedYou = !!theyLikedMe;
         if (iLikedThem && theyLikedMe) {
@@ -97,53 +97,11 @@ router.post('/', async (req, res) => {
   // keep username visible to catch block (avoid ReferenceError)
   let username = undefined;
   try {
-    let { email } = req.body;
-    // require email for signup to disambiguate users
-    if (!email) return res.status(400).json({ error: 'email required' });
-    // basic email validation
-    const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-    if (!emailValid) return res.status(400).json({ error: 'invalid email' });
     username = req.body.username;
-    if (!username) return res.status(400).json({ error: 'username required' });
-
-    // simple validation: usernames should be alphanumeric + dashes/underscores, 2-32 chars
-    const valid = /^[a-zA-Z0-9_-]{2,32}$/.test(username);
-    if (!valid) return res.status(400).json({ error: 'invalid username (allowed: letters, numbers, - or _ , 2-32 chars)' });
-
-    // Attempt to create the user directly. Rely on MongoDB unique index to prevent duplicates.
-    // This avoids the race condition between a separate existence check and insert.
-    // check if username already exists — if it does, check the email
-    // normalize for case-insensitive comparison
-    const normalizedUsername = String(username).trim().toLowerCase();
-    email = String(email).trim().toLowerCase();
-
-    const existing = await User.findOne({ username: normalizedUsername });
-    if (existing) {
-      // If the existing record has the same email -> user already signed up
-      if (existing.email && existing.email === email) {
-        console.log('POST /api/users - username+email match — returning existing user:', username);
-        withDefaultPrompts(existing);
-        return res.status(200).json(existing);
-      }
-
-      // username exists but email differs -> username taken
-      console.log('POST /api/users - username exists with different email:', username);
-      return res.status(409).json({ error: 'username already exists with another email' });
-    }
-
-    console.log('POST /api/users - creating username:', normalizedUsername);
-    // ensure email isn't already used by another username
-    const emailOwner = await User.findOne({ email });
-    if (emailOwner) {
-      return res.status(409).json({ error: 'email already exists with another account' });
-    }
-
-    const createPayload = { username: normalizedUsername, prompts: DEFAULT_PROMPTS };
-    // only attach email if explicitly provided (avoid inserting null which can trip unique indexes)
-    createPayload.email = email;
-    const user = new User(createPayload);
-    await user.save();
-    res.status(201).json(user);
+    const { email } = req.body;
+    const { user, status } = await createUser({ username, email });
+    withDefaultPrompts(user);
+    res.status(status).json(user);
   } catch (err) {
     // duplicate key (username already exists)
     if (err && err.code === 11000) {
@@ -153,7 +111,8 @@ router.post('/', async (req, res) => {
       if (err.keyValue && err.keyValue.email) return res.status(409).json({ error: 'email already exists' });
       return res.status(409).json({ error: 'duplicate key' });
     }
-    res.status(500).json({ error: err.message });
+    const status = err && err.status ? err.status : 500;
+    res.status(status).json({ error: err.message });
   }
 });
 
@@ -187,6 +146,9 @@ router.put('/:username', async (req, res) => {
     if (typeof req.body.username !== 'undefined') return res.status(400).json({ error: 'username is immutable and cannot be changed' });
     let { username } = req.params;
     username = String(username).trim().toLowerCase();
+    if (req.authUser && req.authUser.username !== username) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
     const payload = {};
 
     // Accept only the allowed fields and sanitize types
@@ -241,10 +203,8 @@ router.post('/:username/like', async (req, res) => {
   try {
     const { username } = req.params;
     const normalized = String(username).trim().toLowerCase();
-    const likerUsername = req.body.likerUsername; // passed from frontend
-    const normalizedLiker = String(likerUsername || '').trim().toLowerCase();
-
-    if (!normalizedLiker) return res.status(400).json({ error: 'likerUsername required' });
+    const normalizedLiker = req.authUser ? String(req.authUser.username).trim().toLowerCase() : '';
+    if (!normalizedLiker) return res.status(401).json({ error: 'unauthorized' });
 
     // add liker to target's interestedUsers and target to liker's likedUsers
     const [updatedTarget, updatedLiker] = await Promise.all([

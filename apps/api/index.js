@@ -6,9 +6,10 @@ const mongoose = require('mongoose');
 const fs = require('fs');
 
 const userRoutes = require('./src/routes/users');
+const authRoutes = require('./src/routes/auth');
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '6mb' }));
 app.use(morgan('tiny'));
 
 // Serve static landing page from /public
@@ -35,8 +36,10 @@ app.get('/api', (req, res) => {
 });
 
 app.use('/api/users', userRoutes);
+app.use('/api/auth', authRoutes);
 
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
 
 async function start() {
   if (process.env.MONGODB_URI) {
@@ -50,7 +53,9 @@ async function start() {
     console.warn('MONGODB_URI not set — server will run without DB');
   }
 
-  app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+  app.listen(PORT, HOST, () => {
+    console.log(`Server listening on http://${HOST}:${PORT}`);
+  });
 }
 
 // Only start the server when run directly to make imports (tests) easier

@@ -16,12 +16,34 @@ function Router() {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Check if user is logged in
-    const user = localStorage.getItem("meetCuteUser");
-    if (user) {
-      setIsAuthenticated(true);
-    }
-    setIsLoading(false);
+    let cancelled = false;
+    const checkAuth = async () => {
+      setIsLoading(true);
+      try {
+        const response = await fetch("/api/auth/me", { credentials: "include" });
+        if (!response.ok) {
+          localStorage.removeItem("meetCuteUser");
+          if (!cancelled) setIsAuthenticated(false);
+          return;
+        }
+        const user = await response.json().catch(() => null);
+        if (user?.username) {
+          localStorage.setItem("meetCuteUser", JSON.stringify(user));
+          if (!cancelled) setIsAuthenticated(true);
+        } else if (!cancelled) {
+          setIsAuthenticated(false);
+        }
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) setIsAuthenticated(false);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+    checkAuth();
+    return () => {
+      cancelled = true;
+    };
   }, [location]);
 
   if (isLoading) {
@@ -37,9 +59,36 @@ function Router() {
 
   return (
     <Switch>
-      <Route path={"/login"} component={Login} />
-      <Route path={"/register"} component={Register} />
-      <Route path={"/"} component={Register} />
+      <Route
+        path={"/login"}
+        component={() => {
+          if (isAuthenticated) {
+            setLocation("/user");
+            return null;
+          }
+          return <Login />;
+        }}
+      />
+      <Route
+        path={"/register"}
+        component={() => {
+          if (isAuthenticated) {
+            setLocation("/user");
+            return null;
+          }
+          return <Register />;
+        }}
+      />
+      <Route
+        path={"/"}
+        component={() => {
+          if (isAuthenticated) {
+            setLocation("/user");
+            return null;
+          }
+          return <Register />;
+        }}
+      />
       <Route path={"/*"} component={() => {
         if (!isAuthenticated) {
           setLocation("/login");

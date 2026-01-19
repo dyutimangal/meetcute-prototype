@@ -23,12 +23,20 @@ export default function Login() {
     try {
       const normalizedUsername = username.trim().toLowerCase();
       const normalizedEmail = email.trim().toLowerCase();
-      const response = await fetch(`/api/users/${encodeURIComponent(normalizedUsername)}`);
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          username: normalizedUsername,
+          email: normalizedEmail,
+        }),
+      });
+      const contentType = response.headers.get("content-type") || "";
+      const payload = contentType.includes("application/json")
+        ? await response.json().catch(() => null)
+        : await response.text().catch(() => "");
       if (!response.ok) {
-        const contentType = response.headers.get("content-type") || "";
-        const payload = contentType.includes("application/json")
-          ? await response.json().catch(() => null)
-          : await response.text().catch(() => "");
         if (response.status === 404) {
           setError("Account not found. Please sign up first.");
         } else if (payload && typeof payload === "object" && "error" in payload) {
@@ -41,16 +49,11 @@ export default function Login() {
         return;
       }
 
-      const user = await response.json();
-      if (!user?.email || String(user.email).toLowerCase() !== normalizedEmail) {
-        setError("Email does not match this username.");
-        return;
-      }
-
-      localStorage.setItem(
-        "meetCuteUser",
-        JSON.stringify({ username: user.username || normalizedUsername, email: user.email || normalizedEmail })
-      );
+      const user = payload && typeof payload === "object" ? payload : {};
+      localStorage.setItem("meetCuteUser", JSON.stringify({
+        username: user.username || normalizedUsername,
+        email: user.email || normalizedEmail,
+      }));
       setLocation("/user");
     } catch (err) {
       console.error(err);
