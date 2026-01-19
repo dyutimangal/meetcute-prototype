@@ -1,6 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
+const {
+  createUser,
+  isProfileComplete,
+  getCompleteProfileQuery,
+  canViewUserProfile,
+} = require('../lib/userService');
+const { requireAuth } = require('../lib/session');
 
 const PROMPT_PLACEHOLDER = 'I am too lazy for this shit';
 
@@ -116,6 +123,11 @@ const normalizeInterestedInList = (values) => {
 
 const hasOwnField = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 
+router.use((req, res, next) => {
+  if (req.method === 'POST' && req.path === '/') return next();
+  return requireAuth(req, res, next);
+});
+
 // GET /api/users — list with optional filtering
 // query params:
 //  - exclude=username
@@ -124,9 +136,11 @@ const hasOwnField = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key)
 //  - interestedIn (comma-separated list)
 router.get('/', async (req, res) => {
   try {
-    const { exclude, minAge, maxAge, intention, interestedIn } = req.query;
+    const { minAge, maxAge, intention, interestedIn } = req.query;
     const query = {};
-    if (exclude) query.username = { $ne: String(exclude).trim().toLowerCase() };
+    const andConditions = getCompleteProfileQuery();
+    const authUsername = req.authUser ? String(req.authUser.username).trim().toLowerCase() : null;
+    if (authUsername) query.username = { $ne: authUsername };
 
     const minAgeParsed = parseOptionalIntegerInRange(minAge, { field: 'minAge', min: AGE_MIN, max: AGE_MAX });
     if (minAgeParsed.error) return res.status(400).json({ error: minAgeParsed.error });
@@ -136,14 +150,12 @@ router.get('/', async (req, res) => {
       return res.status(400).json({ error: 'maxAge must be greater than or equal to minAge' });
     }
 
-    // age filtering — include users without an age set (they match any range)
+    // age filtering — only for users with complete profiles
     if (minAgeParsed.value !== undefined || maxAgeParsed.value !== undefined) {
-      const ageQuery = { $or: [{ age: { $exists: false } }, { age: null }] };
       const ageRange = {};
       if (typeof minAgeParsed.value === 'number') ageRange.$gte = minAgeParsed.value;
       if (typeof maxAgeParsed.value === 'number') ageRange.$lte = maxAgeParsed.value;
-      if (Object.keys(ageRange).length > 0) ageQuery.$or.push({ age: ageRange });
-      query.$or = ageQuery.$or;
+      if (Object.keys(ageRange).length > 0) andConditions.push({ age: ageRange });
     }
 
     if (intention) {
@@ -166,14 +178,14 @@ router.get('/', async (req, res) => {
       if (parsed.value.length > 0) query.interestedIn = { $in: parsed.value };
     }
 
+    if (andConditions.length > 0) query.$and = andConditions;
+
     // use .lean() so we can inject generated avatar values without saving to DB here
     const users = await User.find(query).limit(200).lean();
     // Get the requesting user (from exclude param) to compute match status
-    const excludeUsername = exclude ? String(exclude).trim().toLowerCase() : null;
-    let requestingUser = null;
-    if (excludeUsername) {
-      requestingUser = await User.findOne({ username: excludeUsername }).lean();
-    }
+    const requestingUser = authUsername
+      ? await User.findOne({ username: authUsername }).lean()
+      : null;
     const enriched = users.map(u => {
       const originalPrompts = u.prompts ? { ...u.prompts } : {};
       const normalizedIntention = normalizeIntentionList(u.intention || []);
@@ -204,7 +216,7 @@ router.get('/', async (req, res) => {
       // compute match status: orange if liked by requesting user, pink if mutual match
       if (requestingUser) {
         const iLikedThem = requestingUser.likedUsers && requestingUser.likedUsers.includes(u.username);
-        const theyLikedMe = u.likedUsers && u.likedUsers.includes(excludeUsername);
+        const theyLikedMe = u.likedUsers && u.likedUsers.includes(authUsername);
         u.likedByYou = !!iLikedThem;
         u.likedYou = !!theyLikedMe;
         if (iLikedThem && theyLikedMe) {
@@ -230,53 +242,11 @@ router.post('/', async (req, res) => {
   // keep username visible to catch block (avoid ReferenceError)
   let username = undefined;
   try {
-    let { email } = req.body;
-    const avatar = typeof req.body.avatar === 'string' ? req.body.avatar.trim() : '';
-    // require email for signup to disambiguate users
-    if (!email) return res.status(400).json({ error: 'email required' });
-    // basic email validation
-    const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-    if (!emailValid) return res.status(400).json({ error: 'invalid email' });
     username = req.body.username;
-    if (!username) return res.status(400).json({ error: 'username required' });
-
-    // simple validation: usernames should be alphanumeric + dashes/underscores, 2-32 chars
-    const valid = /^[a-zA-Z0-9_-]{2,32}$/.test(username);
-    if (!valid) return res.status(400).json({ error: 'invalid username (allowed: letters, numbers, - or _ , 2-32 chars)' });
-
-    // Attempt to create the user directly. Rely on MongoDB unique index to prevent duplicates.
-    // This avoids the race condition between a separate existence check and insert.
-    // check if username already exists — if it does, check the email
-    // normalize for case-insensitive comparison
-    const normalizedUsername = String(username).trim().toLowerCase();
-    email = String(email).trim().toLowerCase();
-
-    const existing = await User.findOne({ username: normalizedUsername });
-    if (existing) {
-      // If the existing record has the same email -> user already signed up
-      if (existing.email && existing.email === email) {
-        console.log('POST /api/users - username+email match — returning existing user:', username);
-        withDefaultPrompts(existing);
-        return res.status(200).json(existing);
-      }
-
-      // username exists but email differs -> username taken
-      console.log('POST /api/users - username exists with different email:', username);
-      return res.status(409).json({ error: 'username already exists with another email' });
-    }
-
-    console.log('POST /api/users - creating username:', normalizedUsername);
-    // ensure email isn't already used by another username
-    const emailOwner = await User.findOne({ email });
-    if (emailOwner) {
-      return res.status(409).json({ error: 'email already exists with another account' });
-    }
-
-    const createPayload = { username: normalizedUsername, prompts: DEFAULT_PROMPTS, email };
-    if (avatar) createPayload.avatar = avatar;
-    const user = new User(createPayload);
-    await user.save();
-    res.status(201).json(user);
+    const { email } = req.body;
+    const { user, status } = await createUser({ username, email });
+    withDefaultPrompts(user);
+    res.status(status).json(user);
   } catch (err) {
     // duplicate key (username already exists)
     if (err && err.code === 11000) {
@@ -286,7 +256,8 @@ router.post('/', async (req, res) => {
       if (err.keyValue && err.keyValue.email) return res.status(409).json({ error: 'email already exists' });
       return res.status(409).json({ error: 'duplicate key' });
     }
-    res.status(500).json({ error: err.message });
+    const status = err && err.status ? err.status : 500;
+    res.status(status).json({ error: err.message });
   }
 });
 
@@ -297,6 +268,10 @@ router.get('/:username', async (req, res) => {
     const normalized = String(username).trim().toLowerCase();
     let user = await User.findOne({ username: normalized }).lean();
     if (!user) return res.status(404).json({ error: 'not found' });
+    const authUsername = req.authUser ? String(req.authUser.username).trim().toLowerCase() : null;
+    if (!canViewUserProfile(user, authUsername)) {
+      return res.status(404).json({ error: 'not found' });
+    }
     const originalPrompts = user.prompts ? { ...user.prompts } : {};
     const normalizedIntention = normalizeIntentionList(user.intention || []);
     const normalizedInterestedIn = normalizeInterestedInList(user.interestedIn || []);
@@ -336,6 +311,9 @@ router.put('/:username', async (req, res) => {
     if (typeof req.body.username !== 'undefined') return res.status(400).json({ error: 'username is immutable and cannot be changed' });
     let { username } = req.params;
     username = String(username).trim().toLowerCase();
+    if (req.authUser && req.authUser.username !== username) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
     const payload = {};
 
     // Accept only the allowed fields and sanitize types
@@ -426,11 +404,19 @@ router.post('/:username/like', async (req, res) => {
   try {
     const { username } = req.params;
     const normalized = String(username).trim().toLowerCase();
-    const likerUsername = req.body.likerUsername; // passed from frontend
-    const normalizedLiker = String(likerUsername || '').trim().toLowerCase();
+    const normalizedLiker = req.authUser ? String(req.authUser.username).trim().toLowerCase() : '';
     const action = String(req.body.action || 'like').trim().toLowerCase();
 
-    if (!normalizedLiker) return res.status(400).json({ error: 'likerUsername required' });
+    if (!normalizedLiker) return res.status(401).json({ error: 'unauthorized' });
+
+    const [targetUser, likerUser] = await Promise.all([
+      User.findOne({ username: normalized }).lean(),
+      User.findOne({ username: normalizedLiker }).lean()
+    ]);
+    if (!targetUser) return res.status(404).json({ error: 'user not found' });
+    if (!likerUser) return res.status(404).json({ error: 'liker not found' });
+    if (!isProfileComplete(targetUser)) return res.status(404).json({ error: 'user not found' });
+    if (!isProfileComplete(likerUser)) return res.status(403).json({ error: 'complete profile required' });
 
     if (action === 'unlike') {
       const [updatedTarget, updatedLiker] = await Promise.all([

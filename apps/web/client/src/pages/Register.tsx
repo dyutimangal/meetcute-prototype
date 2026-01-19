@@ -7,7 +7,6 @@ import { ArrowLeft } from "lucide-react";
 
 const USERNAME_REGEX = /^[a-zA-Z0-9_-]{2,32}$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 export default function Register() {
   const [, setLocation] = useLocation();
   const [username, setUsername] = useState("");
@@ -36,9 +35,10 @@ export default function Register() {
     try {
       const normalizedUsername = usernameValue.toLowerCase();
       const normalizedEmail = emailValue.toLowerCase();
-      const response = await fetch(apiUrl("/api/users"), {
+      const response = await fetch(apiUrl("/api/auth/register"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           username: normalizedUsername,
           email: normalizedEmail,

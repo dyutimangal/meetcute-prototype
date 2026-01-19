@@ -4,6 +4,15 @@ const request = require('supertest');
 
 let mongod;
 let app;
+const registerUser = async (username, email) => {
+  const res = await request(app)
+    .post('/api/auth/register')
+    .send({ username, email })
+    .set('Accept', 'application/json');
+  const cookies = res.headers['set-cookie'] || [];
+  const sessionCookie = cookies.find((cookie) => cookie.startsWith('meetcute_session='));
+  return { res, sessionCookie };
+};
 
 beforeAll(async () => {
   mongod = await MongoMemoryServer.create();
@@ -96,22 +105,89 @@ test('usernames are case-insensitive', async () => {
 });
 
 test('username cannot be changed (immutable)', async () => {
-  await request(app)
-    .post('/api/users')
-    .send({ username: 'immutest', email: 'immutest@example.com' });
+  const { sessionCookie } = await registerUser('immutest', 'immutest@example.com');
 
   const res = await request(app)
     .put('/api/users/immutest')
+    .set('Cookie', sessionCookie)
     .send({ username: 'newname', age: 35 });
 
   expect(res.statusCode).toBe(400);
   expect(res.body.error).toMatch(/immutable/);
 
   // ensure username didn't change
-  const getOld = await request(app).get('/api/users/immutest');
+  const getOld = await request(app)
+    .get('/api/users/immutest')
+    .set('Cookie', sessionCookie);
   expect(getOld.statusCode).toBe(200);
   expect(getOld.body.username).toBe('immutest');
 
-  const getNew = await request(app).get('/api/users/newname');
+  const getNew = await request(app)
+    .get('/api/users/newname')
+    .set('Cookie', sessionCookie);
   expect(getNew.statusCode).toBe(404);
+});
+
+test('incomplete profiles are hidden from other users', async () => {
+  const { sessionCookie: viewerCookie } = await registerUser('viewer', 'viewer@example.com');
+  await registerUser('incomplete', 'incomplete@example.com');
+  const { sessionCookie: completeCookie } = await registerUser('complete', 'complete@example.com');
+
+  await request(app)
+    .put('/api/users/complete')
+    .set('Cookie', completeCookie)
+    .send({
+      age: 29,
+      gender: 'female',
+      intention: ['dating'],
+      interestedIn: ['guys'],
+      avatar: 'data:image/jpeg;base64,complete',
+      preferredAgeRange: { min: 24, max: 36 },
+    });
+
+  const res = await request(app)
+    .get('/api/users')
+    .set('Cookie', viewerCookie);
+
+  expect(res.statusCode).toBe(200);
+  const usernames = res.body.map((user) => user.username);
+  expect(usernames).toContain('complete');
+  expect(usernames).not.toContain('incomplete');
+  expect(usernames).not.toContain('viewer');
+});
+
+test('incomplete profile is not fetchable by others', async () => {
+  const { sessionCookie: viewerCookie } = await registerUser('viewer2', 'viewer2@example.com');
+  await registerUser('incomplete2', 'incomplete2@example.com');
+
+  const res = await request(app)
+    .get('/api/users/incomplete2')
+    .set('Cookie', viewerCookie);
+
+  expect(res.statusCode).toBe(404);
+});
+
+test('liking requires the liker to complete their profile', async () => {
+  const { sessionCookie: likerCookie } = await registerUser('liker', 'liker@example.com');
+  const { sessionCookie: targetCookie } = await registerUser('target', 'target@example.com');
+
+  await request(app)
+    .put('/api/users/target')
+    .set('Cookie', targetCookie)
+    .send({
+      age: 31,
+      gender: 'male',
+      intention: ['dating'],
+      interestedIn: ['girls'],
+      avatar: 'data:image/jpeg;base64,target',
+      preferredAgeRange: { min: 25, max: 35 },
+    });
+
+  const res = await request(app)
+    .post('/api/users/target/like')
+    .set('Cookie', likerCookie)
+    .send({ action: 'like' });
+
+  expect(res.statusCode).toBe(403);
+  expect(res.body.error).toMatch(/complete profile required/);
 });

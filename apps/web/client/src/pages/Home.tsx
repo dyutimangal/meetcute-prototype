@@ -7,8 +7,9 @@ import { Slider } from "@/components/ui/slider";
 import { profiles as seedProfiles } from "@/lib/data";
 import { apiUrl } from "@/lib/api";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, Bell, Filter, Heart, ImagePlus, Maximize2, MessageCircle, X } from "lucide-react";
-import { useState, useEffect, useId, useRef } from "react";
+import { ArrowLeft, Bell, Filter, Heart, ImagePlus, LogOut, Maximize2, MessageCircle, X } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { useLocation } from "wouter";
 
 type ApiUser = {
   username?: string;
@@ -19,6 +20,7 @@ type ApiUser = {
   gender?: string;
   interestedIn?: string[];
   intention?: string[];
+  preferredAgeRange?: { min?: number; max?: number };
   prompts?: Record<string, string>;
   likedYou?: boolean;
   likedByYou?: boolean;
@@ -26,8 +28,8 @@ type ApiUser = {
 };
 
 const PROMPT_PLACEHOLDER = "I am too lazy for this shit";
-const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
-const MAX_IMAGE_DIMENSION = 8000;
+const TARGET_IMAGE_BYTES = 2 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION = 2048;
 const AGE_MIN = 18;
 const AGE_MAX = 99;
 
@@ -36,6 +38,83 @@ const DEFAULT_PROMPTS = {
   idealWeekend: "",
   superpower: "",
   petPeeve: "",
+};
+
+const loadImageFromFile = (file: File) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Unable to read the image file. Please try another photo."));
+    };
+    img.src = url;
+  });
+
+const blobToDataUrl = (blob: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      if (!result) {
+        reject(new Error("Unable to process the image. Please try another photo."));
+        return;
+      }
+      resolve(result);
+    };
+    reader.onerror = () => {
+      reject(new Error("Unable to process the image. Please try another photo."));
+    };
+    reader.readAsDataURL(blob);
+  });
+
+const compressImageToDataUrl = async (file: File) => {
+  if (file.type && !file.type.startsWith("image/")) {
+    throw new Error("Please upload a PNG or JPEG image.");
+  }
+  const image = await loadImageFromFile(file);
+  let width = image.width;
+  let height = image.height;
+  const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(width, height));
+  width = Math.max(1, Math.round(width * scale));
+  height = Math.max(1, Math.round(height * scale));
+  let quality = 0.9;
+  let blob: Blob | null = null;
+  let attempt = 0;
+
+  // Reduce quality first, then scale down dimensions if still too large.
+  while (attempt < 10) {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("Unable to process the image. Please try another photo.");
+    }
+    ctx.drawImage(image, 0, 0, width, height);
+    blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", quality)
+    );
+    if (!blob) {
+      throw new Error("Unable to process the image. Please try another photo.");
+    }
+    if (blob.size <= TARGET_IMAGE_BYTES) {
+      break;
+    }
+    if (quality > 0.65) {
+      quality -= 0.1;
+    } else {
+      width = Math.max(320, Math.round(width * 0.85));
+      height = Math.max(320, Math.round(height * 0.85));
+    }
+    attempt += 1;
+  }
+
+  return blobToDataUrl(blob);
 };
 
 const INTEREST_OPTIONS = ["girls", "guys", "non-binary"];
@@ -64,6 +143,7 @@ interface Profile {
   gender?: string;
   interestedIn?: string[];
   intention?: string[];
+  preferredAgeRange?: { min?: number; max?: number };
   prompts?: Record<keyof typeof DEFAULT_PROMPTS, string>;
   likedYou?: boolean;
   likedByYou?: boolean;
@@ -88,11 +168,13 @@ const isProfileComplete = (user?: ApiUser) => {
   if (!user) return false;
   const hasAge = typeof user.age === "number" && !Number.isNaN(user.age);
   const hasGender = Boolean(user.gender);
+  const hasAvatar = typeof user.avatar === "string" && user.avatar.trim().length > 0;
+  const isAutoAvatar = hasAvatar && user.avatar?.startsWith("data:image/svg+xml");
   const hasIntention = Array.isArray((user as any).intention) && (user as any).intention.length > 0;
   const hasInterestedIn = Array.isArray(user.interestedIn) && user.interestedIn.length > 0;
   const range = (user as any).preferredAgeRange || {};
   const hasRange = typeof range.min === "number" && typeof range.max === "number";
-  return hasAge && hasGender && hasIntention && hasInterestedIn && hasRange;
+  return hasAge && hasGender && hasAvatar && !isAutoAvatar && hasIntention && hasInterestedIn && hasRange;
 };
 
 const formatLabelValue = (value?: string | number) => {
@@ -145,6 +227,13 @@ const getStoredUser = () => {
   } catch {
     return { raw, username: raw.trim().toLowerCase(), email: "" };
   }
+};
+
+const getActiveUser = (authUser: { username: string; email?: string } | null) => {
+  if (authUser?.username) return authUser;
+  const stored = getStoredUser();
+  if (stored?.username) return { username: stored.username, email: stored.email };
+  return null;
 };
 
 const pickSeedProfile = (key: string, index: number) => {
@@ -249,6 +338,8 @@ interface ChatMessage {
 }
 
 export default function Home() {
+  const [, setLocation] = useLocation();
+  const [authUser, setAuthUser] = useState<{ username: string; email?: string } | null>(null);
   const [selectedProfile, setSelectedProfile] = useState<Profile | null>(null);
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [likedProfiles, setLikedProfiles] = useState<Set<string>>(new Set());
@@ -268,10 +359,11 @@ export default function Home() {
   const [editPrompts, setEditPrompts] = useState<Record<keyof typeof DEFAULT_PROMPTS, string>>(DEFAULT_PROMPTS);
   const [editInterestedIn, setEditInterestedIn] = useState<string[]>([]);
   const [editIntention, setEditIntention] = useState<string[]>([]);
+  const [editPreferredAgeMin, setEditPreferredAgeMin] = useState("");
+  const [editPreferredAgeMax, setEditPreferredAgeMax] = useState("");
   const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
-  const [setupImage, setSetupImage] = useState("");
   const [unreadMatchIds, setUnreadMatchIds] = useState<Set<string>>(new Set<string>());
   const [matchToastProfile, setMatchToastProfile] = useState<Profile | null>(null);
   const [showMatchToast, setShowMatchToast] = useState(false);
@@ -293,6 +385,8 @@ export default function Home() {
     preferredAgeMin: "",
     preferredAgeMax: "",
   });
+  const [setupAvatarDataUrl, setSetupAvatarDataUrl] = useState("");
+  const [setupAvatarName, setSetupAvatarName] = useState("");
   const [filters, setFilters] = useState<FilterState>({
     ageMin: AGE_MIN,
     ageMax: Math.min(65, AGE_MAX),
@@ -301,13 +395,42 @@ export default function Home() {
     matchedWith: false,
   });
 
+  const resolveAuthUser = async () => {
+    const active = getActiveUser(authUser);
+    if (active?.username) {
+      if (!authUser) setAuthUser(active);
+      return active;
+    }
+    try {
+      const response = await fetch(apiUrl("/api/auth/me"), { credentials: "include" });
+      if (!response.ok) return null;
+      const user = await response.json().catch(() => null);
+      if (user?.username) {
+        setAuthUser(user);
+        localStorage.setItem("meetCuteUser", JSON.stringify(user));
+        return user;
+      }
+    } catch (err) {
+      console.error(err);
+    }
+    return null;
+  };
+
   useEffect(() => {
-    const stored = getStoredUser();
-    if (!stored?.username) return;
     let cancelled = false;
+    const ensureUser = async () => {
+      const stored = await resolveAuthUser();
+      if (!stored?.username) {
+        if (!cancelled) setLocation("/login");
+        return null;
+      }
+      return stored;
+    };
 
     const loadUsers = async () => {
       if (cancelled) return;
+      const stored = await ensureUser();
+      if (!stored?.username) return;
       setProfilesError(null);
       try {
         const params = new URLSearchParams();
@@ -321,8 +444,8 @@ export default function Home() {
           params.set("intention", "dating");
         }
         const [meResponse, usersResponse] = await Promise.all([
-          fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}`)),
-          fetch(apiUrl(`/api/users?${params.toString()}`)),
+          fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}`), { credentials: "include" }),
+          fetch(apiUrl(`/api/users?${params.toString()}`), { credentials: "include" }),
         ]);
 
         if (meResponse.ok) {
@@ -339,9 +462,11 @@ export default function Home() {
             gender: meUser.gender,
             interestedIn: meUser.interestedIn,
             intention: meUser.intention,
+            preferredAgeRange: meUser.preferredAgeRange,
             prompts: mergePrompts(meUser.prompts),
           });
         } else {
+          setShowSetupModal(true);
           setCurrentUserProfile({
             id: stored.username,
             name: stored.username,
@@ -371,6 +496,7 @@ export default function Home() {
                   gender: user.gender,
                   interestedIn: user.interestedIn,
                   intention: user.intention,
+                  preferredAgeRange: user.preferredAgeRange,
                   prompts: mergePrompts(user.prompts),
                   likedYou: user.likedYou,
                   likedByYou: user.likedByYou,
@@ -393,6 +519,7 @@ export default function Home() {
       } catch (err) {
         console.error(err);
         setProfilesError("Unable to load users.");
+        setShowSetupModal(true);
       }
     };
 
@@ -408,7 +535,7 @@ export default function Home() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [filters, showSetupModal, isFullScreen, selectedProfile]);
+  }, [filters, showSetupModal, isFullScreen, selectedProfile, authUser]);
 
   useEffect(() => {
     if (!selectedProfile) return;
@@ -419,6 +546,16 @@ export default function Home() {
       setEditPrompts(mergePrompts(selectedProfile.prompts));
       setEditInterestedIn(selectedProfile.interestedIn || []);
       setEditIntention((selectedProfile as any).intention || []);
+      setEditPreferredAgeMin(
+        typeof selectedProfile.preferredAgeRange?.min === "number"
+          ? String(selectedProfile.preferredAgeRange.min)
+          : ""
+      );
+      setEditPreferredAgeMax(
+        typeof selectedProfile.preferredAgeRange?.max === "number"
+          ? String(selectedProfile.preferredAgeRange.max)
+          : ""
+      );
     }
     setIsEditingProfile(false);
     setProfileSaveError(null);
@@ -474,13 +611,15 @@ export default function Home() {
       setSetupError("Preferred max age must be greater than or equal to min age.");
       return;
     }
-
-    const stored = getStoredUser();
+    if (!setupAvatarDataUrl) {
+      setSetupError("Please upload a profile photo to continue.");
+      return;
+    }
+    const stored = getActiveUser(authUser);
     if (!stored?.username) {
       setSetupError("Unable to find your account. Please log in again.");
       return;
     }
-
     try {
       const updatedFields = {
         age: ageResult.value,
@@ -491,11 +630,13 @@ export default function Home() {
       const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           age: updatedFields.age,
           gender: updatedFields.gender,
           intention: updatedFields.intention,
           interestedIn: updatedFields.interestedIn,
+          avatar: setupAvatarDataUrl,
           preferredAgeRange: {
             min: minResult.value,
             max: maxResult.value,
@@ -504,7 +645,7 @@ export default function Home() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        setSetupError(payload?.error || "Unable to save your profile.");
+        setSetupError(payload?.error || "Unable to save profile. Please try again.");
         return;
       }
       // Save setup data with user-specific key
@@ -513,15 +654,36 @@ export default function Home() {
       localStorage.setItem(setupKey, JSON.stringify(setupData));
       // Also save a flag that setup is complete
       localStorage.setItem("meetCuteUserSetup", "true");
-      setShowSetupModal(false);
-      setCurrentUserProfile((prev) => (prev ? { ...prev, ...updatedFields } : prev));
-      setSelectedProfile((prev) =>
-        prev && prev.id === stored.username ? { ...prev, ...updatedFields } : prev
+      const nextImage = payload.avatar || setupAvatarDataUrl;
+      setCurrentUserProfile((prev) =>
+        prev
+          ? {
+              ...prev,
+              ...updatedFields,
+              image: nextImage,
+              preferredAgeRange: { min: minResult.value, max: maxResult.value },
+            }
+          : prev
       );
+      setSelectedProfile((prev) =>
+        prev && prev.id === stored.username
+          ? {
+              ...prev,
+              ...updatedFields,
+              image: nextImage,
+              preferredAgeRange: { min: minResult.value, max: maxResult.value },
+            }
+          : prev
+      );
+      setShowSetupModal(false);
+      setSetupError(null);
     } catch (err) {
       console.error(err);
-      setSetupError("Unable to save your profile. Please try again.");
+      setSetupError("Unable to save profile. Please try again.");
     }
+    return;
+    setShowSetupModal(false);
+    setSetupError(null);
   };
 
   const toggleIntention = (value: string) => {
@@ -540,6 +702,24 @@ export default function Home() {
         ? prev.interestedIn.filter((i) => i !== value)
         : [...prev.interestedIn, value],
     }));
+  };
+
+  const handleSetupAvatarChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setSetupError(null);
+    compressImageToDataUrl(file)
+      .then((result) => {
+        setSetupAvatarDataUrl(result);
+        setSetupAvatarName(file.name);
+        setSetupError(null);
+      })
+      .catch((err) => {
+        console.error(err);
+        setSetupAvatarDataUrl("");
+        setSetupAvatarName("");
+        setSetupError(err?.message || "Unable to process the image. Please try another photo.");
+      });
   };
 
   const activeCurrentUser: Profile = currentUserProfile || {
@@ -612,7 +792,7 @@ export default function Home() {
   }, []);
 
   const toggleLike = async (profileId: string) => {
-    const stored = getStoredUser();
+    const stored = getActiveUser(authUser);
     if (!stored?.username) return;
     const wasLiked = likedProfiles.has(profileId);
     const prevLiked = new Set(likedProfiles);
@@ -639,7 +819,8 @@ export default function Home() {
       const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(profileId)}/like`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ likerUsername: stored.username, action: wasLiked ? "unlike" : "like" }),
+        credentials: "include",
+        body: JSON.stringify({ action: wasLiked ? "unlike" : "like" }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
@@ -740,103 +921,38 @@ export default function Home() {
     );
   };
 
-  const readImageFile = (
-    file: File,
-    onLoad: (dataUrl: string) => void,
-    onError?: (message: string) => void
-  ) => {
-    const reportError = (message: string) => {
-      if (onError) {
-        onError(message);
-      } else {
-        setProfileSaveError(message);
-      }
-    };
-    if (file.size > MAX_IMAGE_BYTES) {
-      reportError("Image is too large. Please upload a PNG or JPEG under 50MB.");
-      return;
-    }
-    if (file.type && !file.type.startsWith("image/")) {
-      reportError("Please upload a PNG or JPEG image.");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
-      if (!result) {
-        reportError("Unable to read the image file. Please try another photo.");
-        return;
-      }
-      const image = new Image();
-      image.onload = () => {
-        if (image.width > MAX_IMAGE_DIMENSION || image.height > MAX_IMAGE_DIMENSION) {
-          reportError(`Image dimensions must be ${MAX_IMAGE_DIMENSION}px or smaller.`);
-          return;
-        }
-        onLoad(result);
-      };
-      image.onerror = () => {
-        reportError("Unable to read the image file. Please try another photo.");
-      };
-      image.src = result;
-    };
-    reader.onerror = () => {
-      reportError("Unable to read the image file. Please try another photo.");
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleSetupImageUpload = async (dataUrl: string) => {
-    const stored = getStoredUser();
-    if (!stored?.username) {
-      setSetupError("Unable to find your account. Please log in again.");
-      return;
-    }
-    setSetupError(null);
-    try {
-      const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}/avatar`), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ avatar: dataUrl }),
+  const readImageFile = (file: File, onLoad: (dataUrl: string) => void) => {
+    setProfileSaveError(null);
+    compressImageToDataUrl(file)
+      .then(onLoad)
+      .catch((err) => {
+        console.error(err);
+        setProfileSaveError(err?.message || "Unable to process the image. Please try another photo.");
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const message =
-          payload?.error ||
-          (response.status === 413
-            ? "Image is too large. Please upload a smaller PNG or JPEG."
-            : `Upload failed (${response.status}). Please try again.`);
-        setSetupError(message);
-        return;
-      }
-      const nextImage = payload.avatar || dataUrl;
-      setSetupImage(nextImage);
-      setCurrentUserProfile((prev) => (prev ? { ...prev, image: nextImage } : prev));
-      setSelectedProfile((prev) =>
-        prev && prev.id === stored.username ? { ...prev, image: nextImage } : prev
-      );
-    } catch (err) {
-      console.error(err);
-      setSetupError("Unable to upload image. Please check your connection and try again.");
-    }
   };
 
   const handleSaveProfile = async () => {
-    const stored = getStoredUser();
+    const stored = getActiveUser(authUser);
     if (!stored?.username) return;
     setIsSavingProfile(true);
     setProfileSaveError(null);
     try {
-    const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}`), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      const minRange = Number(editPreferredAgeMin);
+      const maxRange = Number(editPreferredAgeMax);
+      const hasRange = !Number.isNaN(minRange) && !Number.isNaN(maxRange);
+      const updatePayload = {
         avatar: editImage,
         intention: editIntention,
         interestedIn: editInterestedIn,
         prompts: editPrompts,
-      }),
-    });
+        ...(hasRange ? { preferredAgeRange: { min: minRange, max: maxRange } } : {}),
+      };
+      const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(updatePayload),
+      });
 
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -845,13 +961,14 @@ export default function Home() {
       }
 
       const updatedPrompts = mergePrompts(payload.prompts || editPrompts);
-    const updatedProfile = {
-      ...activeCurrentUser,
-      image: payload.avatar || editImage || activeCurrentUser.image,
-      interestedIn: payload.interestedIn ?? editInterestedIn ?? activeCurrentUser.interestedIn,
-      intention: payload.intention ?? editIntention ?? (activeCurrentUser as any).intention,
-      prompts: updatedPrompts,
-    };
+      const updatedProfile = {
+        ...activeCurrentUser,
+        image: payload.avatar || editImage || activeCurrentUser.image,
+        interestedIn: payload.interestedIn ?? editInterestedIn ?? activeCurrentUser.interestedIn,
+        intention: payload.intention ?? editIntention ?? (activeCurrentUser as any).intention,
+        preferredAgeRange: hasRange ? { min: minRange, max: maxRange } : activeCurrentUser.preferredAgeRange,
+        prompts: updatedPrompts,
+      };
       setCurrentUserProfile(updatedProfile);
       setSelectedProfile(updatedProfile);
       setIsEditingProfile(false);
@@ -864,7 +981,7 @@ export default function Home() {
   };
 
   const handleImageUpload = async (dataUrl: string, kind: "primary" | "secondary") => {
-    const stored = getStoredUser();
+    const stored = getActiveUser(authUser);
     if (!stored?.username) return;
     setProfileSaveError(null);
     try {
@@ -875,6 +992,7 @@ export default function Home() {
       const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(stored.username)}/${endpoint}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(body),
       });
       const payload = await response.json().catch(() => ({}));
@@ -905,6 +1023,22 @@ export default function Home() {
     } catch (err) {
       console.error(err);
       setProfileSaveError("Unable to upload image. Please check your connection and try again.");
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch(apiUrl("/api/auth/logout"), { method: "POST", credentials: "include" });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      const stored = getStoredUser();
+      if (stored?.raw) {
+        localStorage.removeItem("meetCuteUser");
+        localStorage.removeItem("meetCuteUserSetup");
+        localStorage.removeItem(`meetCuteUserSetup_${stored.raw}`);
+      }
+      setLocation("/login");
     }
   };
 
@@ -1104,6 +1238,15 @@ export default function Home() {
                 )}
               </AnimatePresence>
             </div>
+
+            {/* Logout Button */}
+            <button
+              onClick={handleLogout}
+              className="flex items-center justify-center w-8 h-8 text-foreground hover:text-primary transition-colors"
+              title="Log out"
+            >
+              <LogOut className="h-5 w-5" />
+            </button>
           </div>
         </div>
       </div>
@@ -1127,6 +1270,42 @@ export default function Home() {
                 Complete Your Profile
               </h2>
 
+              {/* Profile Photo */}
+              <div className="space-y-2">
+                <label className="block text-sm font-bold text-foreground font-body">Profile Photo</label>
+                <div className="flex items-center gap-4">
+                  <div className="h-20 w-20 border-2 border-black bg-muted/30 flex items-center justify-center overflow-hidden">
+                    {setupAvatarDataUrl ? (
+                      <img
+                        src={setupAvatarDataUrl}
+                        alt="Profile preview"
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-xs text-muted-foreground font-body">Upload</span>
+                    )}
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <input
+                      id="setup-avatar"
+                      type="file"
+                      accept="image/*"
+                      onChange={handleSetupAvatarChange}
+                      className="hidden"
+                    />
+                    <label
+                      htmlFor="setup-avatar"
+                      className="inline-flex items-center justify-center w-full border-2 border-black rounded-none font-body text-sm py-2 px-3 bg-background cursor-pointer hover:bg-muted/30"
+                    >
+                      Choose a photo
+                    </label>
+                    <p className="text-xs text-muted-foreground font-body">
+                      PNG or JPEG{setupAvatarName ? ` · ${setupAvatarName}` : ""}.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               {/* Age Field */}
               <div className="space-y-2">
                 <label className="block text-sm font-bold text-foreground font-body">Your Age</label>
@@ -1140,46 +1319,6 @@ export default function Home() {
                   onChange={(e) => setSetupData({ ...setupData, age: e.target.value })}
                   className="w-full border-2 border-black rounded-none font-body"
                 />
-              </div>
-
-              {/* Profile Photo */}
-              <div className="space-y-2">
-                <label className="block text-sm font-bold text-foreground font-body">Profile Photo</label>
-                <div className="flex items-center gap-4">
-                  <div className="h-20 w-20 border-2 border-black bg-muted/30 flex items-center justify-center overflow-hidden">
-                    {setupImage || currentUserProfile?.image ? (
-                      <img
-                        src={setupImage || currentUserProfile?.image}
-                        alt="Profile preview"
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <span className="text-xs text-muted-foreground font-body">Upload</span>
-                    )}
-                  </div>
-                  <div className="flex-1 space-y-1">
-                    <Input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        setSetupError(null);
-                        readImageFile(
-                          file,
-                          (result) => {
-                            handleSetupImageUpload(result);
-                          },
-                          (message) => setSetupError(message)
-                        );
-                      }}
-                      className="w-full border-2 border-black rounded-none font-body text-sm py-2 px-3"
-                    />
-                    <p className="text-xs text-muted-foreground font-body">
-                      PNG or JPEG, up to 50MB.
-                    </p>
-                  </div>
-                </div>
               </div>
 
               {/* Identification Field */}
@@ -1274,15 +1413,17 @@ export default function Home() {
               </div>
 
               {/* Complete Button */}
-              {setupError && (
-                <p className="text-sm text-red-600 font-body">{setupError}</p>
-              )}
               <Button
                 onClick={handleSetupComplete}
                 className="w-full bg-accent text-accent-foreground border-2 border-black rounded-none font-bold py-3 hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-shadow"
               >
                 Complete Setup
               </Button>
+              {setupError && (
+                <p className="text-sm text-red-600 font-body" role="alert">
+                  {setupError}
+                </p>
+              )}
             </motion.div>
           </motion.div>
         )}
@@ -1683,6 +1824,35 @@ export default function Home() {
                                 <span>{option}</span>
                               </label>
                             ))}
+                          </div>
+                        </div>
+                        <div className="sm:col-span-2">
+                          <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground font-body mb-1">
+                            Preferred age range
+                          </label>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <Input
+                                type="number"
+                                min="18"
+                                max="100"
+                                placeholder="Min"
+                                value={editPreferredAgeMin}
+                                onChange={(e) => setEditPreferredAgeMin(e.target.value)}
+                                className="w-full border-2 border-black rounded-none font-body text-sm"
+                              />
+                            </div>
+                            <div>
+                              <Input
+                                type="number"
+                                min="18"
+                                max="100"
+                                placeholder="Max"
+                                value={editPreferredAgeMax}
+                                onChange={(e) => setEditPreferredAgeMax(e.target.value)}
+                                className="w-full border-2 border-black rounded-none font-body text-sm"
+                              />
+                            </div>
                           </div>
                         </div>
                       </div>
