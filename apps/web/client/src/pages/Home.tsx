@@ -151,11 +151,12 @@ const isProfileComplete = (user?: ApiUser) => {
   if (!user) return false;
   const hasAge = typeof user.age === "number" && !Number.isNaN(user.age);
   const hasGender = Boolean(user.gender);
+  const hasAvatar = typeof user.avatar === "string" && user.avatar.trim().length > 0;
   const hasIntention = Array.isArray((user as any).intention) && (user as any).intention.length > 0;
   const hasInterestedIn = Array.isArray(user.interestedIn) && user.interestedIn.length > 0;
   const range = (user as any).preferredAgeRange || {};
   const hasRange = typeof range.min === "number" && typeof range.max === "number";
-  return hasAge && hasGender && hasIntention && hasInterestedIn && hasRange;
+  return hasAge && hasGender && hasAvatar && hasIntention && hasInterestedIn && hasRange;
 };
 
 const formatLabelValue = (value?: string | number) => {

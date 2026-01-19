@@ -2,7 +2,12 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const { DEFAULT_PROMPTS } = require('../lib/defaultPrompts');
-const { createUser } = require('../lib/userService');
+const {
+  createUser,
+  isProfileComplete,
+  getCompleteProfileQuery,
+  canViewUserProfile,
+} = require('../lib/userService');
 const { requireAuth } = require('../lib/session');
 
 const withDefaultPrompts = (user) => {
@@ -26,19 +31,16 @@ router.get('/', async (req, res) => {
   try {
     const { minAge, maxAge, intention, interestedIn } = req.query;
     const query = {};
+    const andConditions = getCompleteProfileQuery();
     const authUsername = req.authUser ? String(req.authUser.username).trim().toLowerCase() : null;
     if (authUsername) query.username = { $ne: authUsername };
 
-    // age filtering — include users without an age set (they match any range)
+    // age filtering — only for users with complete profiles
     if (minAge || maxAge) {
-      const ageQuery = { $or: [{ age: { $exists: false } }, { age: null }] };
-      if (minAge || maxAge) {
-        const ageRange = {};
-        if (minAge) ageRange.$gte = Number(minAge);
-        if (maxAge) ageRange.$lte = Number(maxAge);
-        ageQuery.$or.push({ age: ageRange });
-      }
-      query.$or = ageQuery.$or;
+      const ageRange = {};
+      if (minAge) ageRange.$gte = Number(minAge);
+      if (maxAge) ageRange.$lte = Number(maxAge);
+      andConditions.push({ age: ageRange });
     }
 
     if (intention) {
@@ -50,6 +52,8 @@ router.get('/', async (req, res) => {
       const arr = String(interestedIn).split(',').map(s => s.trim()).filter(Boolean);
       if (arr.length > 0) query.interestedIn = { $in: arr };
     }
+
+    if (andConditions.length > 0) query.$and = andConditions;
 
     // use .lean() so we can inject generated avatar values without saving to DB here
     const users = await User.find(query).limit(200).lean();
@@ -123,6 +127,10 @@ router.get('/:username', async (req, res) => {
     const normalized = String(username).trim().toLowerCase();
     let user = await User.findOne({ username: normalized }).lean();
     if (!user) return res.status(404).json({ error: 'not found' });
+    const authUsername = req.authUser ? String(req.authUser.username).trim().toLowerCase() : null;
+    if (!canViewUserProfile(user, authUsername)) {
+      return res.status(404).json({ error: 'not found' });
+    }
     const needsPrompts = !user.prompts || Object.keys(user.prompts).length === 0;
     if (!user.avatar && user.username) {
       const initial = (user.username && user.username[0]) ? user.username[0].toUpperCase() : '?';
@@ -205,6 +213,15 @@ router.post('/:username/like', async (req, res) => {
     const normalized = String(username).trim().toLowerCase();
     const normalizedLiker = req.authUser ? String(req.authUser.username).trim().toLowerCase() : '';
     if (!normalizedLiker) return res.status(401).json({ error: 'unauthorized' });
+
+    const [targetUser, likerUser] = await Promise.all([
+      User.findOne({ username: normalized }).lean(),
+      User.findOne({ username: normalizedLiker }).lean()
+    ]);
+    if (!targetUser) return res.status(404).json({ error: 'user not found' });
+    if (!likerUser) return res.status(404).json({ error: 'liker not found' });
+    if (!isProfileComplete(targetUser)) return res.status(404).json({ error: 'user not found' });
+    if (!isProfileComplete(likerUser)) return res.status(403).json({ error: 'complete profile required' });
 
     // add liker to target's interestedUsers and target to liker's likedUsers
     const [updatedTarget, updatedLiker] = await Promise.all([

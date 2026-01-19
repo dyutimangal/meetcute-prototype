@@ -4,6 +4,35 @@ const { DEFAULT_PROMPTS } = require('./defaultPrompts');
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME_REGEX = /^[a-zA-Z0-9_-]{2,32}$/;
 
+const isProfileComplete = (user) => {
+  if (!user) return false;
+  const hasAge = typeof user.age === 'number' && !Number.isNaN(user.age);
+  const hasGender = Boolean(user.gender);
+  const hasAvatar = typeof user.avatar === 'string' && user.avatar.trim().length > 0;
+  const hasIntention = Array.isArray(user.intention) && user.intention.length > 0;
+  const hasInterestedIn = Array.isArray(user.interestedIn) && user.interestedIn.length > 0;
+  const range = user.preferredAgeRange || {};
+  const hasRange = typeof range.min === 'number' && typeof range.max === 'number';
+  return hasAge && hasGender && hasAvatar && hasIntention && hasInterestedIn && hasRange;
+};
+
+const getCompleteProfileQuery = () => ([
+  { age: { $type: 'number' } },
+  { gender: { $exists: true, $ne: null } },
+  { avatar: { $exists: true, $type: 'string', $ne: '' } },
+  { 'intention.0': { $exists: true } },
+  { 'interestedIn.0': { $exists: true } },
+  { 'preferredAgeRange.min': { $type: 'number' } },
+  { 'preferredAgeRange.max': { $type: 'number' } }
+]);
+
+const canViewUserProfile = (user, viewerUsername) => {
+  if (!user) return false;
+  const normalizedViewer = viewerUsername ? String(viewerUsername).trim().toLowerCase() : '';
+  if (normalizedViewer && user.username === normalizedViewer) return true;
+  return isProfileComplete(user);
+};
+
 const createUser = async ({ username, email }) => {
   if (!email) {
     const err = new Error('email required');
@@ -56,4 +85,9 @@ const createUser = async ({ username, email }) => {
   return { user, status: 201, existing: false };
 };
 
-module.exports = { createUser };
+module.exports = {
+  createUser,
+  isProfileComplete,
+  getCompleteProfileQuery,
+  canViewUserProfile,
+};
